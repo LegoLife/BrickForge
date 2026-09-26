@@ -205,6 +205,52 @@ public class BuildTests
     }
 
     [Fact]
+    public void Group_needs_only_one_part_connected()
+    {
+        var build = NewBuild();
+        Place(build, Brick2x2, 0, 0, 0);
+        // A tower whose bottom brick sits on the existing one; the upper brick only touches the group.
+        var group = PartGroup.From([
+            new PlacedPart(1, Brick2x2, new GridPos(0, 0, 0), Rotation.R0, 0),
+            new PlacedPart(2, Brick2x2, new GridPos(0, 3, 0), Rotation.R0, 0),
+        ]);
+
+        Assert.Equal(PlacementError.None, build.CheckGroup(group.At(new GridPos(0, 3, 0)).ToList()));
+    }
+
+    [Fact]
+    public void Floating_group_is_rejected()
+    {
+        var build = NewBuild();
+        var group = PartGroup.From([new PlacedPart(1, Brick2x2, new GridPos(0, 0, 0), Rotation.R0, 0)]);
+
+        Assert.Equal(PlacementError.NotConnected, build.CheckGroup(group.At(new GridPos(4, 6, 4)).ToList()));
+    }
+
+    [Fact]
+    public void Group_with_any_part_off_the_baseplate_is_rejected()
+    {
+        var group = PartGroup.From([
+            new PlacedPart(1, Brick2x2, new GridPos(0, 0, 0), Rotation.R0, 0),
+            new PlacedPart(2, Brick2x2, new GridPos(4, 0, 0), Rotation.R0, 0),
+        ]);
+
+        Assert.Equal(PlacementError.OutOfBounds, NewBuild().CheckGroup(group.At(new GridPos(11, 0, 0)).ToList()));
+    }
+
+    [Fact]
+    public void Group_overlapping_the_build_is_rejected_unless_those_parts_are_moving()
+    {
+        var build = NewBuild();
+        var existing = Place(build, Brick2x2, 0, 0, 0);
+        var group = PartGroup.From([existing]);
+        var shifted = group.At(new GridPos(1, 0, 0)).ToList();
+
+        Assert.Equal(PlacementError.Overlaps, build.CheckGroup(shifted));
+        Assert.Equal(PlacementError.None, build.CheckGroup(shifted, ignore: new HashSet<int> { existing.Id }));
+    }
+
+    [Fact]
     public void Part_at_finds_the_part_occupying_a_cell()
     {
         var build = NewBuild();

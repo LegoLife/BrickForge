@@ -41,6 +41,8 @@
                         @onclick="() => _editor.SetMode(EditorMode.Build)">Build</button>
                 <button class="@Active(_editor.Mode == EditorMode.Paint)" title="Paint (P)"
                         @onclick="() => _editor.SetMode(EditorMode.Paint)">Paint</button>
+                <button class="@Active(_editor.Mode == EditorMode.Select)" title="Select (S)"
+                        @onclick="() => _editor.SetMode(EditorMode.Select)">Select</button>
             </div>
             <button class="rotate" title="Rotate (R / Shift+R)" @onclick="() => _editor.Rotate(1)">
                 ⟳ @((int)_editor.Rotation * 90)°
@@ -48,13 +50,21 @@
         </div>
 
         <p class="status">
-            @if (_editor.Carrying is not null)
+            @if (_editor.Held is { IsPaste: true } paste)
             {
-                <span class="carrying">Moving — click to drop, Esc to cancel</span>
+                <span class="carrying">Pasting @Parts(paste.Group.Parts.Count) — click to stamp, R to rotate, Esc to stop</span>
+            }
+            else if (_editor.Held is { } moving)
+            {
+                <span class="carrying">Moving @Parts(moving.Moving.Count) — click to drop, R to rotate, Esc to cancel</span>
             }
             else if (_editor.Mode == EditorMode.Paint)
             {
-                <span>Click parts to paint them <strong>@_editor.Color.Name</strong></span>
+                <span>Click parts to paint them <strong>@_editor.Color.Name</strong>@(_editor.Selection.Count > 1 ? " (a selected part paints the whole selection)" : "")</span>
+            }
+            else if (_editor.Mode == EditorMode.Select)
+            {
+                <span>Click to select · Ctrl+click to add · drag to box-select</span>
             }
             else
             {
@@ -62,13 +72,23 @@
             }
         </p>
 
+        <div class="selection-bar">
+            <span>@(_editor.Selection.Count == 0 ? "Nothing selected" : $"{Parts(_editor.Selection.Count)} selected")</span>
+            <div class="selection-actions">
+                <button title="Copy (Ctrl+C)" disabled="@(_editor.Selection.Count == 0)" @onclick="_editor.Copy">Copy</button>
+                <button title="Cut (Ctrl+X)" disabled="@(_editor.Selection.Count == 0)" @onclick="_editor.Cut">Cut</button>
+                <button title="Paste (Ctrl+V)" disabled="@(!_editor.HasClipboard)" @onclick="_editor.Paste">Paste</button>
+                <button title="Delete selection (Del)" disabled="@(_editor.Selection.Count == 0)" @onclick="_editor.DeleteSelection">Delete</button>
+            </div>
+        </div>
+
         @foreach (var group in PartCatalog.All.GroupBy(p => p.Kind))
         {
             <h2>@(group.Key)s</h2>
             <div class="part-grid">
                 @foreach (var part in group)
                 {
-                    <button class="part @Active(part == _editor.Part && _editor.Mode == EditorMode.Build)"
+                    <button class="part @Active(part == _editor.Part && _editor.Mode == EditorMode.Build && _editor.Held is null)"
                             title="@part.Name" @onclick="() => _editor.SelectPart(part)">
                         @Footprint(part)
                         <span>@part.Width×@part.Depth</span>
@@ -120,13 +140,16 @@
 @code {
     private static readonly (string Keys, string Action)[] Controls =
     [
-        ("Click", "place / paint"),
+        ("Click", "place / paint / select"),
         ("Right-click · Del", "remove"),
-        ("Shift+click", "move"),
+        ("Shift+click", "move (whole selection if selected)"),
         ("Alt+click · E", "eyedropper"),
         ("R", "rotate"),
-        ("B · P", "build · paint"),
-        ("Esc", "cancel move"),
+        ("B · P · S", "build · paint · select"),
+        ("Drag", "box-select"),
+        ("Ctrl+C · X · V", "copy · cut · paste"),
+        ("Ctrl+A", "select all"),
+        ("Esc", "cancel · deselect"),
         ("Ctrl+Z · Ctrl+Y", "undo · redo"),
         ("Right-drag", "orbit"),
         ("Middle-drag", "pan"),
@@ -280,6 +303,8 @@
     }
 
     private static string? Active(bool active) => active ? "selected" : null;
+
+    private static string Parts(int count) => count == 1 ? "1 part" : $"{count} parts";
     /// <summary>Top-down icon: the part's outline with a dot per stud (none for tiles).</summary>
     private static RenderFragment Footprint(PartType part) => builder =>
     {

@@ -113,37 +113,88 @@ export function createViewport(host, o, dotnet) {
     }
 
     // ---- tool, ghost & highlight -----------------------------------------------------------
-    /** @typedef {{ partId: string, colorId: number, rotation: number, mode: 'build' | 'paint' }} Tool */
+    /**
+     * The current tool, from C#. `ghost` is what a click in build mode would place — a group of
+     * one or more parts — flat as [catalogIndex, dx, dy, dz, rotation, colorId] per part, with
+     * offsets from the group's minimum corner; `ghostSize` is its [x, y (plates), z] extent.
+     * @typedef {{ mode: 'build' | 'paint' | 'select', ghost: number[], ghostSize: [number, number, number], selection: number[] }} Tool
+     */
     /** @type {Tool | null} */
     let tool = null;
-    const ghostBody = new THREE.MeshStandardMaterial({ transparent: true, opacity: 0.55, depthWrite: false });
     const ghostLine = new THREE.LineBasicMaterial({ color: VALID_COLOR });
+    const ghostInvalid = new THREE.MeshStandardMaterial({ color: INVALID_COLOR, transparent: true, opacity: 0.35, depthWrite: false });
+    /** See-through version of each colour, for the ghost. @type {Map<number, THREE.MeshStandardMaterial>} */
+    const ghostMaterials = new Map();
     const ghost = new THREE.Group();
     ghost.visible = false;
     scene.add(ghost);
+    let ghostValid = true;
+
+    /** @param {number} colorId */
+    function ghostMaterial(colorId) {
+        let m = ghostMaterials.get(colorId);
+        if (!m) {
+            m = new THREE.MeshStandardMaterial({ transparent: true, opacity: 0.6, depthWrite: false });
+            m.color.copy(/** @type {THREE.MeshStandardMaterial} */ (materials.get(colorId)).color);
+            ghostMaterials.set(colorId, m);
+        }
+        return m;
+    }
 
     function rebuildGhost() {
         ghost.children.forEach(c => { if (c instanceof THREE.LineSegments) c.geometry.dispose(); });
         ghost.clear();
         if (!tool) return;
-        const def = partDefs.get(tool.partId);
-        if (!def) return;
-        ghost.add(new THREE.Mesh(geometries.model(def.id), ghostBody));
-        const box = new THREE.BoxGeometry(def.width, def.heightPlates * PH, def.depth);
-        box.translate(0, def.heightPlates * PH / 2, 0);
+        const g = tool.ghost;
+        for (let i = 0; i < g.length; i += 6) {
+            const def = o.parts[g[i]];
+            const mesh = new THREE.Mesh(geometries.model(def.id), ghostMaterial(g[i + 5]));
+            mesh.userData.colorId = g[i + 5];
+            const [sx, sz] = footprint(def, g[i + 4]);
+            mesh.position.set(g[i + 1] + sx / 2, g[i + 2] * PH, g[i + 3] + sz / 2);
+            mesh.rotation.y = -g[i + 4] * Math.PI / 2;
+            ghost.add(mesh);
+        }
+        const [sx, sy, sz] = tool.ghostSize;
+        const box = new THREE.BoxGeometry(sx, sy * PH, sz);
+        box.translate(sx / 2, sy * PH / 2, sz / 2);
         ghost.add(new THREE.LineSegments(new THREE.EdgesGeometry(box), ghostLine));
         box.dispose();
+        paintGhost(ghostValid);
     }
 
     /** @param {boolean} valid */
     function paintGhost(valid) {
-        const color = tool && materials.get(tool.colorId);
-        if (valid && color) ghostBody.color.copy(color.color);
-        else ghostBody.color.setHex(INVALID_COLOR);
-        ghostBody.opacity = valid ? 0.6 : 0.35;
+        ghostValid = valid;
+        for (const child of ghost.children) {
+            if (child instanceof THREE.Mesh) child.material = valid ? ghostMaterial(child.userData.colorId) : ghostInvalid;
+        }
         ghostLine.color.setHex(valid ? VALID_COLOR : INVALID_COLOR);
     }
 
+    // Selected parts get a translucent blue shell.
+    const selectionMaterial = new THREE.MeshBasicMaterial({ color: 0x4da3ff, transparent: true, opacity: 0.28, depthWrite: false });
+    const selectionShell = new THREE.BoxGeometry(1, 1, 1);
+    selectionShell.translate(0, 0.5, 0);
+    /** @type {InstanceBatch<number> | null} */
+    let selectionBatch = null;
+
+    function updateSelection() {
+        selectionBatch?.dispose();
+        selectionBatch = new InstanceBatch(scene, selectionShell, selectionMaterial, false);
+        const pad = 0.06;
+        for (const id of tool?.selection ?? []) {
+            const rec = parts.record(id);
+            if (!rec) continue; // e.g. hidden while being moved
+            scratchObject.position.set(rec.x + rec.sx / 2 - W / 2, rec.y * PH - pad / 2, rec.z + rec.sz / 2 - D / 2);
+            scratchObject.rotation.set(0, 0, 0);
+            scratchObject.scale.set(rec.sx + pad, rec.h * PH + o.studHeight + pad, rec.sz + pad);
+            scratchObject.updateMatrix();
+            selectionBatch.add(id, scratchObject.matrix);
+        }
+        scratchObject.scale.set(1, 1, 1);
+        selectionBatch.mesh.renderOrder = 1;
+    }
     // Outline around the part a click would act on (paint, eyedropper, pick up).
     const unitBox = new THREE.BoxGeometry(1, 1, 1);
     unitBox.translate(0, 0.5, 0);
@@ -156,7 +207,7 @@ export function createViewport(host, o, dotnet) {
     const modifiers = { alt: false, shift: false };
 
     /** Whether a click would act on the hovered part rather than place the ghost. */
-    const targetingPart = () => tool?.mode === 'paint' || modifiers.alt || modifiers.shift;
+    const targetingPart = () => tool?.mode !== 'build' || modifiers.alt || modifiers.shift;
 
     function updateHighlight() {
         const rec = hoveredPartId !== null && targetingPart() ? parts.record(hoveredPartId) : undefined;
@@ -183,18 +234,20 @@ export function createViewport(host, o, dotnet) {
         hoveredPartId = hit?.partId ?? null;
         updateHighlight();
 
-        const def = tool?.mode === 'build' ? partDefs.get(tool.partId) : undefined;
+        const size = tool?.mode === 'build' ? tool.ghostSize : null;
         const aimingAtPart = hoveredPartId !== null && (modifiers.alt || modifiers.shift);
-        const next = hit && def && tool && !aimingAtPart ? candidateFor(hit, def, tool.rotation) : null;
-        if (sameCell(next, candidate)) return;
-
-        candidate = next;
-        if (!candidate || !def || !tool) {
+        const next = hit && size && !aimingAtPart && !boxSelect ? candidateFor(hit, size) : null;
+        if (!next) {
+            // Checked before the same-cell test: refreshHover() resets candidate to null, so a
+            // mode switch would otherwise look like "no change" and leave the ghost showing.
+            candidate = null;
             ghost.visible = false;
             return;
         }
-        const [sx, sz] = footprint(def, tool.rotation);
-        placeObject(ghost, candidate, sx, sz, tool.rotation, o);
+        if (sameCell(next, candidate)) return;
+
+        candidate = next;
+        ghost.position.set(candidate.x - W / 2, candidate.y * PH, candidate.z - D / 2);
         ghost.visible = true;
 
         const seq = ++hoverSeq;
@@ -221,11 +274,12 @@ export function createViewport(host, o, dotnet) {
     }
 
     /**
-     * Where the selected part would go, as its minimum corner, given what the cursor is over.
-     * @param {Hit} hit @param {PartDef} def @param {number} rotation
+     * Where the ghost would go, as its minimum corner, given what the cursor is over.
+     * @param {Hit} hit @param {[number, number, number]} size the ghost's [x, y (plates), z] extent
      * @returns {Cell}
      */
-    function candidateFor(hit, def, rotation) {
+    function candidateFor(hit, size) {
+        const [sx, sy, sz] = size;
         const p = hit.point;
         let cx = Math.floor(p.x + W / 2), cz = Math.floor(p.z + D / 2), y = 0;
 
@@ -236,7 +290,7 @@ export function createViewport(host, o, dotnet) {
             if (p.y >= top - eps) {
                 y = target.y + target.h;                 // on top (body or studs)
             } else if (p.y <= bottom + eps) {
-                y = target.y - def.heightPlates;          // underneath
+                y = target.y - sy;                        // underneath
             } else {
                 // Side face: step out of the target through the nearest side, same base level.
                 y = target.y;
@@ -253,7 +307,6 @@ export function createViewport(host, o, dotnet) {
             }
         }
 
-        const [sx, sz] = footprint(def, rotation);
         return {
             x: clamp(cx - Math.floor((sx - 1) / 2), 0, W - sx),
             y,
@@ -264,11 +317,49 @@ export function createViewport(host, o, dotnet) {
     // ---- input ---------------------------------------------------------------------------
     // C# decides what a click or key means (place, paint, eyedrop, pick up, undo...);
     // this side only reports where the pointer is and which modifiers are held.
-    const PLAIN_KEYS = new Set(['r', 'b', 'p', 'e', 'escape', 'delete', 'backspace']);
-    const CTRL_KEYS = new Set(['z', 'y']);
+    const PLAIN_KEYS = new Set(['r', 'b', 'p', 's', 'e', 'escape', 'delete', 'backspace']);
+    const CTRL_KEYS = new Set(['z', 'y', 'c', 'x', 'v', 'a']);
 
     /** @type {{ x: number, y: number, button: number } | null} */
     let press = null;
+
+    // Box-select: in select mode, a left-drag draws a rectangle; parts whose centres fall inside it
+    // (including ones hidden behind others, as in most 3D editors) are selected on release.
+    /** @type {HTMLDivElement | null} */
+    let boxSelect = null;
+
+    /** @param {PointerEvent} e */
+    function updateBoxSelect(e) {
+        if (!press || press.button !== 0 || tool?.mode !== 'select') return;
+        if (!boxSelect) {
+            if (Math.hypot(e.clientX - press.x, e.clientY - press.y) <= CLICK_TOLERANCE_PX) return;
+            boxSelect = document.createElement('div');
+            boxSelect.className = 'select-box';
+            host.appendChild(boxSelect);
+            refreshHover(); // hide the hover outline while dragging
+        }
+        const rect = host.getBoundingClientRect();
+        const left = Math.min(press.x, e.clientX) - rect.left, top = Math.min(press.y, e.clientY) - rect.top;
+        Object.assign(boxSelect.style, {
+            left: `${left}px`, top: `${top}px`,
+            width: `${Math.abs(e.clientX - press.x)}px`, height: `${Math.abs(e.clientY - press.y)}px`,
+        });
+    }
+
+    /** Ids of parts whose centre projects inside the box-select rectangle. */
+    function partsInBox() {
+        const box = /** @type {HTMLDivElement} */ (boxSelect).getBoundingClientRect();
+        const rect = canvas.getBoundingClientRect();
+        const ids = [];
+        const v = new THREE.Vector3();
+        for (const rec of parts.records.values()) {
+            v.set(rec.x + rec.sx / 2 - W / 2, (rec.y + rec.h / 2) * PH, rec.z + rec.sz / 2 - D / 2).project(camera);
+            if (v.z > 1) continue; // behind the camera
+            const sx = rect.left + (v.x + 1) / 2 * rect.width, sy = rect.top + (1 - v.y) / 2 * rect.height;
+            if (sx >= box.left && sx <= box.right && sy >= box.top && sy <= box.bottom) ids.push(rec.id);
+        }
+        return ids;
+    }
 
     /** @param {PointerEvent} e */
     function onPointerMove(e) {
@@ -276,6 +367,7 @@ export function createViewport(host, o, dotnet) {
         pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
         pointerInside = true;
         setModifiers(e);
+        updateBoxSelect(e);
         updateHover();
     }
 
@@ -294,10 +386,20 @@ export function createViewport(host, o, dotnet) {
         const p = press;
         press = null;
         if (!p || p.button !== e.button) return;
+        const ctrl = e.ctrlKey || e.metaKey;
+
+        if (boxSelect) {
+            const ids = partsInBox();
+            boxSelect.remove();
+            boxSelect = null;
+            refreshHover();
+            await call('BoxSelect', ids, ctrl || e.shiftKey);
+            return;
+        }
         if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > CLICK_TOLERANCE_PX) return; // was a drag
 
         if (e.button === 0) {
-            await call('Click', candidate, hoveredPartId, e.altKey, e.shiftKey);
+            await call('Click', candidate, hoveredPartId, e.altKey, e.shiftKey, ctrl);
         } else if (e.button === 2 && hoveredPartId !== null) {
             await call('Remove', hoveredPartId);
         }
@@ -391,9 +493,10 @@ export function createViewport(host, o, dotnet) {
                     x: added[i + 2], y: added[i + 3], z: added[i + 4], rotation: added[i + 5], colorId: added[i + 6],
                 });
             }
-            const shapeChanged = !tool || tool.partId !== next.partId || tool.rotation !== next.rotation;
+            const ghostChanged = !tool || !sameNumbers(tool.ghost, next.ghost);
             tool = next;
-            if (shapeChanged) rebuildGhost();
+            if (ghostChanged) rebuildGhost();
+            updateSelection();
             refreshHover();
         },
         /** Rendering counters, for checking performance from the console. */
@@ -439,8 +542,13 @@ export function createViewport(host, o, dotnet) {
             geometries.dispose();
             materials.dispose();
             baseplate.material.dispose();
-            ghostBody.dispose();
             ghostLine.dispose();
+            ghostInvalid.dispose();
+            ghostMaterials.forEach(m => m.dispose());
+            selectionBatch?.dispose();
+            selectionShell.dispose();
+            selectionMaterial.dispose();
+            boxSelect?.remove();
             highlightMaterial.dispose();
             renderer.dispose();
             canvas.remove();
@@ -809,6 +917,11 @@ function sameCell(a, b) {
 
 /** @param {number} v @param {number} lo @param {number} hi */
 function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
+
+/** @param {number[]} a @param {number[]} b */
+function sameNumbers(a, b) {
+    return a.length === b.length && a.every((v, i) => v === b[i]);
+}
 
 /** @param {KeyboardEvent} e */
 function isTyping(e) {

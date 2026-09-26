@@ -136,7 +136,7 @@ public class EditorTests
 
         _editor.PickUp(part.Id);
 
-        Assert.Same(part, _editor.Carrying);
+        Assert.Equal([part], _editor.Held!.Moving);
         Assert.Single(_editor.Build.Parts);
         Assert.Equal([part.Id], _changes.Last().Removed);
     }
@@ -151,7 +151,7 @@ public class EditorTests
 
         var moved = _editor.Build.Parts.Single();
         Assert.Equal((part.Id, new GridPos(6, 0, 6)), (moved.Id, moved.Position));
-        Assert.Null(_editor.Carrying);
+        Assert.Null(_editor.Held);
 
         _editor.Undo();
         Assert.Equal(new GridPos(0, 0, 0), _editor.Build.Parts.Single().Position);
@@ -188,7 +188,7 @@ public class EditorTests
 
         _editor.Cancel();
 
-        Assert.Null(_editor.Carrying);
+        Assert.Null(_editor.Held);
         Assert.Equal([part], _changes.Last().Added);
         Assert.Equal([part], _editor.Build.Parts);
     }
@@ -201,7 +201,7 @@ public class EditorTests
 
         _editor.SelectPart(Brick2x2);
 
-        Assert.Null(_editor.Carrying);
+        Assert.Null(_editor.Held);
         Assert.Equal(Brick2x2, _editor.Part);
     }
 
@@ -349,7 +349,7 @@ public class EditorTests
 
         _editor.Undo();
 
-        Assert.Null(_editor.Carrying);
+        Assert.Null(_editor.Held);
         Assert.Single(_editor.Build.Parts); // second placement undone
         // The view must re-show the carried part before removing it, not in one remove-then-add change.
         Assert.Equal(

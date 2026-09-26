@@ -513,3 +513,37 @@ kbd {
     .modal-actions button {
         padding: 6px 14px;
     }
+
+/* --- Milestone 6: selection --- */
+.selection-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 10px 0 0;
+    padding: 8px;
+    border: 1px solid #2a3142;
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+    .selection-bar > span {
+        opacity: 0.8;
+    }
+
+.selection-actions {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+}
+
+    .selection-actions button {
+        padding: 4px 0;
+        font-size: 12px;
+    }
+
+.select-box {
+    position: absolute;
+    border: 1px solid #4da3ff;
+    background: rgba(77, 163, 255, 0.12);
+    pointer-events: none;
+}

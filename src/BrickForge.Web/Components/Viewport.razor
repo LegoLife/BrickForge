@@ -61,10 +61,10 @@
                 baseplate = change.Baseplate is { } plate ? new { width = plate.WidthStuds, depth = plate.DepthStuds } : null,
                 tool = new
                 {
-                    partId = Editor.Part.Id,
-                    colorId = Editor.Color.Id,
-                    rotation = (int)Editor.Rotation,
-                    mode = Editor.Mode == EditorMode.Paint ? "paint" : "build",
+                    mode = Editor.Mode.ToString().ToLowerInvariant(),
+                    ghost = FlattenGroup(Editor.Ghost),
+                    ghostSize = new[] { Editor.Ghost.SizeX, Editor.Ghost.SizeY, Editor.Ghost.SizeZ },
+                    selection = Editor.Selection.ToArray(),
                 },
             });
         }
@@ -82,7 +82,7 @@
     public bool CanPlace(int x, int y, int z) => Editor.CanPlaceAt(new GridPos(x, y, z));
 
     [JSInvokable]
-    public void Click(CellDto? cell, int? partId, bool alt, bool shift)
+    public void Click(CellDto? cell, int? partId, bool alt, bool shift, bool ctrl)
     {
         switch (partId)
         {
@@ -92,6 +92,9 @@
             case { } id when shift:
                 Editor.PickUp(id);
                 break;
+            case var id when Editor.Mode == EditorMode.Select:
+                Editor.Select(id, additive: ctrl);
+                break;
             case { } id when Editor.Mode == EditorMode.Paint:
                 Editor.Paint(id);
                 break;
@@ -100,6 +103,9 @@
                 break;
         }
     }
+
+    [JSInvokable]
+    public void BoxSelect(int[] partIds, bool additive) => Editor.SelectMany(partIds, additive);
 
     [JSInvokable]
     public void Remove(int partId) => Editor.Remove(partId);
@@ -114,12 +120,37 @@
             case ("z", true): Editor.Undo(); break;
             case ("y", true): Editor.Redo(); break;
             case ("r", false): Editor.Rotate(shift ? -1 : 1); break;
+            case ("c", true): Editor.Copy(); break;
+            case ("x", true): Editor.Cut(); break;
+            case ("v", true): Editor.Paste(); break;
+            case ("a", true): Editor.SelectAll(); break;
             case ("b", false): Editor.SetMode(EditorMode.Build); break;
             case ("p", false): Editor.SetMode(EditorMode.Paint); break;
+            case ("s", false): Editor.SetMode(EditorMode.Select); break;
             case ("escape", false): Editor.Cancel(); break;
             case ("e", false) when hoveredPartId is { } id: Editor.Eyedrop(id); break;
+            // An explicit selection wins over whatever happens to be under the cursor.
+            case ("delete" or "backspace", false) when Editor.Selection.Count > 0: Editor.DeleteSelection(); break;
             case ("delete" or "backspace", false) when hoveredPartId is { } id: Editor.Remove(id); break;
         }
+    }
+
+    /// <summary>A group as a flat array of <c>[catalogIndex, dx, dy, dz, rotation, colorId]</c> per part.</summary>
+    private static int[] FlattenGroup(PartGroup group)
+    {
+        var flat = new int[group.Parts.Count * 6];
+        for (var i = 0; i < group.Parts.Count; i++)
+        {
+            var p = group.Parts[i];
+            var o = i * 6;
+            flat[o] = CatalogIndex[p.Part];
+            flat[o + 1] = p.Offset.X;
+            flat[o + 2] = p.Offset.Y;
+            flat[o + 3] = p.Offset.Z;
+            flat[o + 4] = (int)p.Rotation;
+            flat[o + 5] = p.ColorId;
+        }
+        return flat;
     }
 
     private static readonly Dictionary<PartType, int> CatalogIndex =

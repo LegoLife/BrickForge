@@ -43,17 +43,50 @@ public sealed class Build(Baseplate baseplate)
     public PlacedPart? Find(int partId) => _parts.GetValueOrDefault(partId);
 
     /// <param name="ignorePartId">A part being moved: its own cells neither block nor support the check.</param>
-    public PlacementError Check(PartType part, GridPos position, Rotation rotation, int? ignorePartId = null)
+    public PlacementError Check(PartType part, GridPos position, Rotation rotation, int? ignorePartId = null) =>
+        CheckGroup(
+            [new PartPlacement(part, position, rotation, 0)],
+            ignorePartId is { } id ? new HashSet<int> { id } : null);
+
+    /// <summary>
+    /// Checks placing several parts together: each must be on the baseplate and overlap nothing
+    /// (nor each other), and at least one must join the existing build or the baseplate. Parts in
+    /// the group need not join the build individually — they hold on to each other.
+    /// </summary>
+    /// <param name="ignore">Parts being moved: their own cells neither block nor support the check.</param>
+    public PlacementError CheckGroup(IReadOnlyList<PartPlacement> placements, IReadOnlySet<int>? ignore = null)
     {
-        var (sizeX, sizeZ) = part.Footprint(rotation);
-        if (position.X < 0 || position.Z < 0 || position.Y < 0 ||
-            position.X + sizeX > Baseplate.WidthStuds || position.Z + sizeZ > Baseplate.DepthStuds)
-            return PlacementError.OutOfBounds;
+        foreach (var p in placements)
+        {
+            var (sizeX, sizeZ) = p.Part.Footprint(p.Rotation);
+            if (p.Position.X < 0 || p.Position.Z < 0 || p.Position.Y < 0 ||
+                p.Position.X + sizeX > Baseplate.WidthStuds || p.Position.Z + sizeZ > Baseplate.DepthStuds)
+                return PlacementError.OutOfBounds;
+        }
 
-        if (CellsOf(part, position, rotation).Any(cell => OccupantOf(cell, ignorePartId) is not null))
-            return PlacementError.Overlaps;
+        var claimed = new HashSet<GridPos>();
+        foreach (var p in placements)
+        foreach (var cell in CellsOf(p.Part, p.Position, p.Rotation))
+        {
+            if (OccupantOf(cell, ignore) is not null || !claimed.Add(cell))
+                return PlacementError.Overlaps;
+        }
 
-        return IsConnected(part, position, sizeX, sizeZ, ignorePartId) ? PlacementError.None : PlacementError.NotConnected;
+        return placements.Any(p => IsConnected(p.Part, p.Position, p.Rotation, ignore))
+            ? PlacementError.None
+            : PlacementError.NotConnected;
+    }
+
+    /// <summary>Adds parts already validated with <see cref="CheckGroup"/>, giving each a new id.</summary>
+    public IReadOnlyList<PlacedPart> AddGroup(IReadOnlyList<PartPlacement> placements)
+    {
+        if (CheckGroup(placements) is var error and not PlacementError.None)
+            throw new InvalidOperationException($"Cannot add group: {error}.");
+        var added = placements
+            .Select(p => new PlacedPart(_nextId++, p.Part, p.Position, p.Rotation, p.ColorId))
+            .ToList();
+        foreach (var part in added) Insert(part);
+        return added;
     }
 
     public PlaceResult TryPlace(PartType part, GridPos position, Rotation rotation, int colorId)
@@ -114,11 +147,12 @@ public sealed class Build(Baseplate baseplate)
         foreach (var cell in part.Cells()) _occupied.Add(cell, part);
     }
 
-    private PlacedPart? OccupantOf(GridPos cell, int? ignorePartId) =>
-        _occupied.TryGetValue(cell, out var p) && p.Id != ignorePartId ? p : null;
+    private PlacedPart? OccupantOf(GridPos cell, IReadOnlySet<int>? ignore) =>
+        _occupied.TryGetValue(cell, out var p) && ignore?.Contains(p.Id) != true ? p : null;
 
-    private bool IsConnected(PartType part, GridPos position, int sizeX, int sizeZ, int? ignorePartId)
+    private bool IsConnected(PartType part, GridPos position, Rotation rotation, IReadOnlySet<int>? ignore)
     {
+        var (sizeX, sizeZ) = part.Footprint(rotation);
         if (position.Y == 0) return true; // baseplate studs
 
         var below = position.Y - 1;
@@ -127,10 +161,10 @@ public sealed class Build(Baseplate baseplate)
         for (var z = position.Z; z < position.Z + sizeZ; z++)
         {
             // The cell directly below is necessarily the top layer of whatever occupies it.
-            if (OccupantOf(new GridPos(x, below, z), ignorePartId) is { Part.HasStuds: true })
+            if (OccupantOf(new GridPos(x, below, z), ignore) is { Part.HasStuds: true })
                 return true;
             // Every part has anti-studs underneath; ours needs studs to push into them.
-            if (part.HasStuds && OccupantOf(new GridPos(x, above, z), ignorePartId) is not null)
+            if (part.HasStuds && OccupantOf(new GridPos(x, above, z), ignore) is not null)
                 return true;
         }
         return false;
