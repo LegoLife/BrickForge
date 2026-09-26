@@ -93,7 +93,7 @@ public sealed class Editor(Build build)
             var moved = Build.Modify(carried.Id, position, Rotation, Color.Id);
             if (!moved.Success) return;
             Carrying = null;
-            Commit(new Step(Before: carried, After: moved.Part));
+            Commit(Step.Of(carried, moved.Part));
             // The view hid the part on pick-up, so there is nothing of it left to remove.
             Raise(new BuildChange([moved.Part!], []));
             return;
@@ -101,7 +101,7 @@ public sealed class Editor(Build build)
 
         var placed = Build.TryPlace(Part, position, Rotation, Color.Id);
         if (!placed.Success) return;
-        Commit(new Step(Before: null, After: placed.Part));
+        Commit(Step.Of(null, placed.Part));
         Raise(new BuildChange([placed.Part!], []));
     }
 
@@ -109,7 +109,7 @@ public sealed class Editor(Build build)
     {
         if (Carrying?.Id == partId || !TryGetPart(partId, out var part)) return;
         Build.Remove(partId);
-        Commit(new Step(Before: part, After: null));
+        Commit(Step.Of(part, null));
         Raise(new BuildChange([], [partId]));
     }
 
@@ -118,7 +118,7 @@ public sealed class Editor(Build build)
     {
         if (!TryGetPart(partId, out var part) || part.ColorId == Color.Id || Carrying?.Id == partId) return;
         var painted = Build.Modify(partId, part.Position, part.Rotation, Color.Id).Part!;
-        Commit(new Step(Before: part, After: painted));
+        Commit(Step.Of(part, painted));
         Raise(new BuildChange([painted], [partId]));
     }
 
@@ -138,6 +138,28 @@ public sealed class Editor(Build build)
     /// <summary>Puts a carried part back where it was.</summary>
     public void Cancel() => Raise(DropCarry());
 
+    /// <summary>Swaps the whole build for <paramref name="parts"/> (e.g. an imported file) as one undo step.</summary>
+    public void ReplaceAll(IReadOnlyList<PlacedPart> parts)
+    {
+        CancelCarryFirst();
+        var before = Build.Parts.ToList();
+        if (before.Count == 0 && parts.Count == 0) return;
+        var step = new Step(before, parts);
+        Commit(step);
+        Raise(Apply(from: step.Before, to: step.After));
+    }
+
+    /// <summary>Removes every part, as one undo step.</summary>
+    public void Clear() => ReplaceAll([]);
+
+    /// <summary>Drops undo/redo, e.g. after restoring an autosave so the first undo can't empty the build.</summary>
+    public void ForgetHistory()
+    {
+        _undo.Clear();
+        _redo.Clear();
+        Raise(BuildChange.None);
+    }
+
     public void Undo()
     {
         CancelCarryFirst();
@@ -156,8 +178,12 @@ public sealed class Editor(Build build)
 
     // ---- internals ----------------------------------------------------------------------------
 
-    /// <summary>One undoable action: a part going from one state to another (null = absent).</summary>
-    private sealed record Step(PlacedPart? Before, PlacedPart? After);
+    /// <summary>One undoable action: a set of parts replaced by another (either may be empty).</summary>
+    private sealed record Step(IReadOnlyList<PlacedPart> Before, IReadOnlyList<PlacedPart> After)
+    {
+        public static Step Of(PlacedPart? before, PlacedPart? after) =>
+            new(before is null ? [] : [before], after is null ? [] : [after]);
+    }
 
     private void Commit(Step step)
     {
@@ -165,11 +191,11 @@ public sealed class Editor(Build build)
         _redo.Clear();
     }
 
-    private BuildChange Apply(PlacedPart? from, PlacedPart? to)
+    private BuildChange Apply(IReadOnlyList<PlacedPart> from, IReadOnlyList<PlacedPart> to)
     {
-        if (from is not null) Build.Remove(from.Id);
-        if (to is not null) Build.Restore(to);
-        return new BuildChange(to is null ? [] : [to], from is null ? [] : [from.Id]);
+        foreach (var part in from) Build.Remove(part.Id);
+        foreach (var part in to) Build.Restore(part);
+        return new BuildChange(to, [.. from.Select(p => p.Id)]);
     }
 
     /// <summary>Ends a carry, returning the change that re-shows the part in its original place.</summary>

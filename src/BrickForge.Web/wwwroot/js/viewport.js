@@ -44,6 +44,7 @@ export function createViewport(host, o, dotnet) {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.shadowMap.enabled = true;
+    renderer.toneMapping = THREE.NeutralToneMapping; // keeps brick colours saturated, unlike ACES
     host.appendChild(renderer.domElement);
     const canvas = renderer.domElement;
 
@@ -52,7 +53,8 @@ export function createViewport(host, o, dotnet) {
 
     const span = Math.max(W, D);
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, span * 20);
-    camera.position.set(span * 0.7, span * 0.75, span * 1.0);
+    const homePosition = new THREE.Vector3(span * 0.7, span * 0.75, span * 1.0);
+    camera.position.copy(homePosition);
 
     const controls = new OrbitControls(camera, canvas);
     controls.enableDamping = true;
@@ -65,11 +67,11 @@ export function createViewport(host, o, dotnet) {
 
     addLights(scene, span);
     const baseplate = createBaseplate(o);
-    scene.add(baseplate);
+    scene.add(baseplate.slab);
 
     const geometries = new PartGeometries(o, partDefs);
     const materials = new ColorMaterials(o.colors);
-    const parts = new PartBatches(scene, geometries, materials, o);
+    const parts = new PartRenderer(scene, geometries, materials, o, baseplate.material);
 
     // ---- tool, ghost & highlight -----------------------------------------------------------
     /** @typedef {{ partId: string, colorId: number, rotation: number, mode: 'build' | 'paint' }} Tool */
@@ -87,7 +89,7 @@ export function createViewport(host, o, dotnet) {
         if (!tool) return;
         const def = partDefs.get(tool.partId);
         if (!def) return;
-        ghost.add(new THREE.Mesh(geometries.get(def.id), ghostBody));
+        ghost.add(new THREE.Mesh(geometries.model(def.id), ghostBody));
         const box = new THREE.BoxGeometry(def.width, def.heightPlates * PH, def.depth);
         box.translate(0, def.heightPlates * PH / 2, 0);
         ghost.add(new THREE.LineSegments(new THREE.EdgesGeometry(box), ghostLine));
@@ -170,7 +172,7 @@ export function createViewport(host, o, dotnet) {
      */
     function raycast() {
         raycaster.setFromCamera(pointer, camera);
-        const hits = raycaster.intersectObjects([...parts.meshes(), baseplate], true);
+        const hits = raycaster.intersectObjects([...parts.meshes(), baseplate.slab], false);
         const first = hits[0];
         if (!first) return null;
         const partId = first.object instanceof THREE.InstancedMesh && first.instanceId !== undefined
@@ -268,6 +270,10 @@ export function createViewport(host, o, dotnet) {
         setModifiers(e);
         const key = e.key.toLowerCase();
         const ctrl = e.ctrlKey || e.metaKey;
+        if (key === 'f' && !ctrl) {
+            resetView(); // camera only, so C# needn't know
+            return;
+        }
         if (!(ctrl ? CTRL_KEYS.has(key) : PLAIN_KEYS.has(key))) return;
         e.preventDefault();
         await call('Key', key, ctrl, e.shiftKey, hoveredPartId);
@@ -289,6 +295,12 @@ export function createViewport(host, o, dotnet) {
         modifiers.alt = e.altKey;
         modifiers.shift = e.shiftKey;
         refreshHover();
+    }
+
+    function resetView() {
+        camera.position.copy(homePosition);
+        controls.target.set(0, 0, 0);
+        controls.update();
     }
 
     /** Re-evaluate what's under a stationary cursor after the scene or tool changed. */
@@ -324,18 +336,53 @@ export function createViewport(host, o, dotnet) {
         renderer.render(scene, camera);
     });
 
-    return {
+    const api = {
         /**
          * Applies one change from C#: removals first, then additions, then the current tool.
-         * @param {{ added: PlacedDto[], removed: number[], tool: Tool }} update
+         * `added` is flat: [id, catalogIndex, x, y, z, rotation, colorId] per part.
+         * @param {{ added: number[], removed: number[], tool: Tool }} update
          */
         update({ added, removed, tool: next }) {
             for (const id of removed) parts.remove(id);
-            for (const dto of added) parts.add(dto);
+            for (let i = 0; i < added.length; i += 7) {
+                parts.add({
+                    id: added[i], partId: o.parts[added[i + 1]].id,
+                    x: added[i + 2], y: added[i + 3], z: added[i + 4], rotation: added[i + 5], colorId: added[i + 6],
+                });
+            }
             const shapeChanged = !tool || tool.partId !== next.partId || tool.rotation !== next.rotation;
             tool = next;
             if (shapeChanged) rebuildGhost();
             refreshHover();
+        },
+        /** Rendering counters, for checking performance from the console. */
+        stats() {
+            return {
+                parts: parts.records.size,
+                visibleStuds: parts.studs.size,
+                partTriangles: parts.triangleCount(),
+                drawCalls: renderer.info.render.calls,
+                frameTriangles: renderer.info.render.triangles,
+                hoveredPartId,
+                candidate,
+            };
+        },
+        /**
+         * Average milliseconds to render one frame, measured synchronously (so it works even when the
+         * tab is hidden and requestAnimationFrame is paused). A 1-pixel read-back forces the GPU to finish.
+         * @param {number} frames
+         */
+        benchmark(frames = 30) {
+            const gl = renderer.getContext();
+            const pixel = new Uint8Array(4);
+            renderer.render(scene, camera); // warm-up: shader compilation
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            const start = performance.now();
+            for (let i = 0; i < frames; i++) {
+                renderer.render(scene, camera);
+                gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            }
+            return +((performance.now() - start) / frames).toFixed(2);
         },
         dispose() {
             renderer.setAnimationLoop(null);
@@ -347,8 +394,10 @@ export function createViewport(host, o, dotnet) {
             scene.traverse(obj => {
                 if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) obj.geometry.dispose();
             });
+            parts.dispose();
             geometries.dispose();
             materials.dispose();
+            baseplate.material.dispose();
             ghostBody.dispose();
             ghostLine.dispose();
             highlightMaterial.dispose();
@@ -356,59 +405,82 @@ export function createViewport(host, o, dotnet) {
             canvas.remove();
         },
     };
+    // Reachable from the console as document.querySelector('.viewport').viewport, e.g. for .stats().
+    Object.assign(host, { viewport: api });
+    return api;
 }
 
 // ---- parts rendering ---------------------------------------------------------------------
 
-/** One merged body+studs geometry per part type, built lazily and shared by every instance. */
+const STUD_SEGMENTS = 12;
+
+/**
+ * Per part type: a plain body box for instancing (studs are drawn separately), and a full
+ * body-plus-studs model for the ghost preview. Plus the one shared stud geometry.
+ */
 class PartGeometries {
     /** @param {ViewportOptions} o @param {Map<string, PartDef>} defs */
     constructor(o, defs) {
         this.o = o;
         this.defs = defs;
         /** @type {Map<string, THREE.BufferGeometry>} */
-        this.cache = new Map();
+        this.bodies = new Map();
+        /** @type {Map<string, THREE.BufferGeometry>} */
+        this.models = new Map();
+        this.stud = createStudGeometry(o);
     }
 
-    /** @param {string} partId */
-    get(partId) {
-        let g = this.cache.get(partId);
+    /** Centred on x/z, bottom at y = 0, unrotated. @param {string} partId */
+    body(partId) {
+        let g = this.bodies.get(partId);
         if (!g) {
-            g = this.build(/** @type {PartDef} */ (this.defs.get(partId)));
-            this.cache.set(partId, g);
+            const def = /** @type {PartDef} */ (this.defs.get(partId));
+            const h = def.heightPlates * this.o.plateHeight, inset = this.o.partInset;
+            g = new THREE.BoxGeometry(def.width - inset * 2, h, def.depth - inset * 2);
+            g.translate(0, h / 2, 0);
+            this.bodies.set(partId, g);
         }
         return g;
     }
 
-    /** Centred on x/z, bottom at y = 0, unrotated. @param {PartDef} def */
-    build(def) {
-        const { plateHeight: PH, partInset: inset, studDiameter, studHeight } = this.o;
-        const h = def.heightPlates * PH;
-        const pieces = [];
-
-        const body = new THREE.BoxGeometry(def.width - inset * 2, h, def.depth - inset * 2);
-        body.translate(0, h / 2, 0);
-        pieces.push(body);
-
-        if (def.hasStuds) {
-            for (let i = 0; i < def.width; i++) {
-                for (let j = 0; j < def.depth; j++) {
-                    const stud = new THREE.CylinderGeometry(studDiameter / 2, studDiameter / 2, studHeight, 16);
-                    stud.translate(i + 0.5 - def.width / 2, h + studHeight / 2, j + 0.5 - def.depth / 2);
-                    pieces.push(stud);
+    /** @param {string} partId */
+    model(partId) {
+        let g = this.models.get(partId);
+        if (!g) {
+            const def = /** @type {PartDef} */ (this.defs.get(partId));
+            const h = def.heightPlates * this.o.plateHeight;
+            const pieces = [this.body(partId).clone()];
+            if (def.hasStuds) {
+                for (let i = 0; i < def.width; i++) {
+                    for (let j = 0; j < def.depth; j++) {
+                        pieces.push(this.stud.clone().translate(i + 0.5 - def.width / 2, h, j + 0.5 - def.depth / 2));
+                    }
                 }
             }
+            g = /** @type {THREE.BufferGeometry} */ (mergeGeometries(pieces));
+            pieces.forEach(p => p.dispose());
+            this.models.set(partId, g);
         }
-
-        const merged = /** @type {THREE.BufferGeometry} */ (mergeGeometries(pieces));
-        pieces.forEach(p => p.dispose());
-        return merged;
+        return g;
     }
 
     dispose() {
-        this.cache.forEach(g => g.dispose());
-        this.cache.clear();
+        [...this.bodies.values(), ...this.models.values(), this.stud].forEach(g => g.dispose());
     }
+}
+
+/** An open cylinder with a top cap only: the bottom is always hidden inside the part. @param {ViewportOptions} o */
+function createStudGeometry(o) {
+    const r = o.studDiameter / 2;
+    const side = new THREE.CylinderGeometry(r, r, o.studHeight, STUD_SEGMENTS, 1, true);
+    side.translate(0, o.studHeight / 2, 0);
+    const cap = new THREE.CircleGeometry(r, STUD_SEGMENTS);
+    cap.rotateX(-Math.PI / 2);
+    cap.translate(0, o.studHeight, 0);
+    const stud = /** @type {THREE.BufferGeometry} */ (mergeGeometries([side, cap]));
+    side.dispose();
+    cap.dispose();
+    return stud;
 }
 
 class ColorMaterials {
@@ -431,37 +503,140 @@ class ColorMaterials {
 }
 
 /**
- * Parts are drawn as one InstancedMesh per (part type, colour), so thousands of parts cost a
- * handful of draw calls. Removal swaps the last instance into the freed slot.
+ * A growable InstancedMesh whose instances are addressed by key.
+ * Removal swaps the last instance into the freed slot, so draws stay contiguous.
+ * @template K
  */
-class PartBatches {
+class InstanceBatch {
     /**
-     * @param {THREE.Scene} scene @param {PartGeometries} geometries
-     * @param {ColorMaterials} materials @param {ViewportOptions} o
+     * @param {THREE.Scene} scene @param {THREE.BufferGeometry} geometry
+     * @param {THREE.Material} material @param {boolean} castShadow
      */
-    constructor(scene, geometries, materials, o) {
+    constructor(scene, geometry, material, castShadow) {
+        this.scene = scene;
+        this.geometry = geometry;
+        this.material = material;
+        this.castShadow = castShadow;
+        /** @type {K[]} */
+        this.keys = [];
+        /** @type {Map<K, number>} */
+        this.indexOf = new Map();
+        this.mesh = this.createMesh(16);
+    }
+
+    /** @param {number} capacity */
+    createMesh(capacity) {
+        const mesh = new THREE.InstancedMesh(this.geometry, this.material, capacity);
+        mesh.castShadow = this.castShadow;
+        mesh.receiveShadow = true;
+        mesh.count = this.keys.length;
+        this.scene.add(mesh);
+        return mesh;
+    }
+
+    /** @param {K} key @param {THREE.Matrix4} matrix */
+    add(key, matrix) {
+        if (this.keys.length === this.mesh.instanceMatrix.count) this.grow();
+        const index = this.keys.length;
+        this.keys.push(key);
+        this.indexOf.set(key, index);
+        this.mesh.setMatrixAt(index, matrix);
+        this.mesh.count = this.keys.length;
+        this.touched();
+    }
+
+    /** @param {K} key */
+    remove(key) {
+        const index = this.indexOf.get(key);
+        if (index === undefined) return;
+        const last = this.keys.length - 1;
+        if (index !== last) {
+            this.mesh.getMatrixAt(last, scratchMatrix);
+            this.mesh.setMatrixAt(index, scratchMatrix);
+            const moved = this.keys[last];
+            this.keys[index] = moved;
+            this.indexOf.set(moved, index);
+        }
+        this.keys.pop();
+        this.indexOf.delete(key);
+        this.mesh.count = this.keys.length;
+        this.touched();
+    }
+
+    /** @param {number} index */
+    keyAt(index) { return this.keys[index]; }
+
+    grow() {
+        const old = this.mesh;
+        this.mesh = this.createMesh(old.instanceMatrix.count * 2);
+        this.mesh.instanceMatrix.array.set(old.instanceMatrix.array);
+        this.scene.remove(old);
+        old.dispose();
+    }
+
+    touched() {
+        this.mesh.instanceMatrix.needsUpdate = true;
+        this.mesh.boundingSphere = null; // recomputed lazily for raycasting/culling
+        this.mesh.boundingBox = null;
+    }
+
+    dispose() {
+        this.scene.remove(this.mesh);
+        this.mesh.dispose();
+    }
+}
+
+const scratchMatrix = new THREE.Matrix4();
+const scratchObject = new THREE.Object3D();
+
+/**
+ * @typedef {{ id: number, bodyKey: string, x: number, y: number, z: number, sx: number, sz: number,
+ *             h: number, hasStuds: boolean, colorId: number }} PartRecord
+ */
+
+/**
+ * Draws the placed parts. Bodies are batched per (part type, colour) and cast shadows.
+ * Studs are batched per colour and drawn only where exposed — where the cell above is empty —
+ * which hides most of them on a real build. The baseplate's studs are managed the same way.
+ */
+class PartRenderer {
+    /**
+     * @param {THREE.Scene} scene @param {PartGeometries} geometries @param {ColorMaterials} materials
+     * @param {ViewportOptions} o @param {THREE.Material} baseplateMaterial
+     */
+    constructor(scene, geometries, materials, o, baseplateMaterial) {
         this.scene = scene;
         this.geometries = geometries;
         this.materials = materials;
         this.o = o;
-        /** @type {Map<string, { mesh: THREE.InstancedMesh, ids: number[] }>} */
-        this.batches = new Map();
-        /** @typedef {{ key: string, x: number, y: number, z: number, sx: number, sz: number, h: number }} PartRecord */
+        this.baseplateMaterial = baseplateMaterial;
         /** @type {Map<number, PartRecord>} */
         this.records = new Map();
-        /** @type {Map<THREE.InstancedMesh, string>} */
-        this.keyOfMesh = new Map();
+        /** Occupied grid cells "x,y,z" → part id. @type {Map<string, number>} */
+        this.cells = new Map();
+        /** @type {Map<string, InstanceBatch<number>>} */
+        this.bodyBatches = new Map();
+        /** Keyed by colour id, or 'base' for the baseplate. @type {Map<number | 'base', InstanceBatch<string>>} */
+        this.studBatches = new Map();
+        /** Visible stud at "x,y,z" (y = the level it stands on) → its batch key. @type {Map<string, number | 'base'>} */
+        this.studs = new Map();
+
+        for (let x = 0; x < o.baseplateWidth; x++) {
+            for (let z = 0; z < o.baseplateDepth; z++) this.addStud(x, 0, z, 'base');
+        }
     }
 
-    meshes() { return [...this.keyOfMesh.keys()]; }
+    meshes() { return [...this.bodyBatches.values()].map(b => b.mesh); }
 
     /** @param {number} id */
     record(id) { return this.records.get(id); }
 
-    /** @param {THREE.InstancedMesh} mesh @param {number} index */
+    /** @param {THREE.Object3D} mesh @param {number} index @returns {number | null} */
     partIdAt(mesh, index) {
-        const key = this.keyOfMesh.get(mesh);
-        return key !== undefined ? this.batches.get(key)?.ids[index] ?? null : null;
+        for (const batch of this.bodyBatches.values()) {
+            if (batch.mesh === mesh) return batch.keyAt(index) ?? null;
+        }
+        return null;
     }
 
     /** @param {PlacedDto} dto */
@@ -469,21 +644,26 @@ class PartBatches {
         const def = this.geometries.defs.get(dto.partId);
         if (!def || this.records.has(dto.id)) return;
         const [sx, sz] = footprint(def, dto.rotation);
-        const key = `${dto.partId}|${dto.colorId}`;
-        const batch = this.ensureCapacity(key, dto);
+        /** @type {PartRecord} */
+        const rec = {
+            id: dto.id, bodyKey: `${dto.partId}|${dto.colorId}`, x: dto.x, y: dto.y, z: dto.z,
+            sx, sz, h: def.heightPlates, hasStuds: def.hasStuds, colorId: dto.colorId,
+        };
+        this.records.set(rec.id, rec);
 
-        const matrix = new THREE.Matrix4();
-        const holder = new THREE.Object3D();
-        placeObject(holder, dto, sx, sz, dto.rotation, this.o);
-        holder.updateMatrix();
-        matrix.copy(holder.matrix);
+        placeObject(scratchObject, dto, sx, sz, dto.rotation, this.o);
+        scratchObject.updateMatrix();
+        this.bodyBatch(rec.bodyKey, dto.partId, dto.colorId).add(rec.id, scratchObject.matrix);
 
-        const index = batch.ids.length;
-        batch.ids.push(dto.id);
-        batch.mesh.setMatrixAt(index, matrix);
-        batch.mesh.count = batch.ids.length;
-        this.touched(batch.mesh);
-        this.records.set(dto.id, { key, x: dto.x, y: dto.y, z: dto.z, sx, sz, h: def.heightPlates });
+        for (let x = rec.x; x < rec.x + sx; x++) {
+            for (let z = rec.z; z < rec.z + sz; z++) {
+                for (let y = rec.y; y < rec.y + rec.h; y++) this.cells.set(cellKey(x, y, z), rec.id);
+                this.removeStud(x, rec.y, z); // now pushed into our underside
+                if (rec.hasStuds && !this.cells.has(cellKey(x, rec.y + rec.h, z))) {
+                    this.addStud(x, rec.y + rec.h, z, rec.colorId);
+                }
+            }
+        }
     }
 
     /** @param {number} id */
@@ -491,54 +671,76 @@ class PartBatches {
         const rec = this.records.get(id);
         if (!rec) return;
         this.records.delete(id);
-        const batch = /** @type {{ mesh: THREE.InstancedMesh, ids: number[] }} */ (this.batches.get(rec.key));
-        const index = batch.ids.indexOf(id);
-        const last = batch.ids.length - 1;
-        if (index !== last) {
-            const m = new THREE.Matrix4();
-            batch.mesh.getMatrixAt(last, m);
-            batch.mesh.setMatrixAt(index, m);
-            batch.ids[index] = batch.ids[last];
+        this.bodyBatches.get(rec.bodyKey)?.remove(id);
+
+        for (let x = rec.x; x < rec.x + rec.sx; x++) {
+            for (let z = rec.z; z < rec.z + rec.sz; z++) {
+                for (let y = rec.y; y < rec.y + rec.h; y++) this.cells.delete(cellKey(x, y, z));
+                this.removeStud(x, rec.y + rec.h, z);
+                // Whatever we were sitting on has its studs uncovered.
+                if (rec.y === 0) {
+                    this.addStud(x, 0, z, 'base');
+                } else {
+                    const below = this.records.get(this.cells.get(cellKey(x, rec.y - 1, z)) ?? -1);
+                    if (below?.hasStuds) this.addStud(x, rec.y, z, below.colorId);
+                }
+            }
         }
-        batch.ids.pop();
-        batch.mesh.count = batch.ids.length;
-        this.touched(batch.mesh);
     }
 
-    /** @param {string} key @param {PlacedDto} dto */
-    ensureCapacity(key, dto) {
-        let batch = this.batches.get(key);
-        const capacity = batch ? batch.mesh.instanceMatrix.count : 0;
-        const needed = (batch?.ids.length ?? 0) + 1;
-        if (batch && needed <= capacity) return batch;
-
-        const material = /** @type {THREE.Material} */ (this.materials.get(dto.colorId));
-        const mesh = new THREE.InstancedMesh(this.geometries.get(dto.partId), material, Math.max(16, capacity * 2));
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        if (batch) {
-            mesh.instanceMatrix.array.set(batch.mesh.instanceMatrix.array);
-            this.scene.remove(batch.mesh);
-            this.keyOfMesh.delete(batch.mesh);
-            batch.mesh.dispose();
-            batch.mesh = mesh;
-        } else {
-            batch = { mesh, ids: [] };
-            this.batches.set(key, batch);
+    /** @param {number} x @param {number} y @param {number} z @param {number | 'base'} batchKey */
+    addStud(x, y, z, batchKey) {
+        const key = cellKey(x, y, z);
+        if (this.studs.has(key)) return;
+        let batch = this.studBatches.get(batchKey);
+        if (!batch) {
+            const material = batchKey === 'base' ? this.baseplateMaterial : this.materials.get(batchKey);
+            batch = new InstanceBatch(this.scene, this.geometries.stud, /** @type {THREE.Material} */ (material), false);
+            this.studBatches.set(batchKey, batch);
         }
-        mesh.count = batch.ids.length;
-        this.scene.add(mesh);
-        this.keyOfMesh.set(mesh, key);
+        scratchMatrix.makeTranslation(
+            x + 0.5 - this.o.baseplateWidth / 2, y * this.o.plateHeight, z + 0.5 - this.o.baseplateDepth / 2);
+        batch.add(key, scratchMatrix);
+        this.studs.set(key, batchKey);
+    }
+
+    /** @param {number} x @param {number} y @param {number} z */
+    removeStud(x, y, z) {
+        const key = cellKey(x, y, z);
+        const batchKey = this.studs.get(key);
+        if (batchKey === undefined) return;
+        this.studBatches.get(batchKey)?.remove(key);
+        this.studs.delete(key);
+    }
+
+    /** @param {string} key @param {string} partId @param {number} colorId */
+    bodyBatch(key, partId, colorId) {
+        let batch = this.bodyBatches.get(key);
+        if (!batch) {
+            const material = /** @type {THREE.Material} */ (this.materials.get(colorId));
+            batch = new InstanceBatch(this.scene, this.geometries.body(partId), material, true);
+            this.bodyBatches.set(key, batch);
+        }
         return batch;
     }
 
-    /** @param {THREE.InstancedMesh} mesh */
-    touched(mesh) {
-        mesh.instanceMatrix.needsUpdate = true;
-        mesh.boundingSphere = null; // recomputed lazily for raycasting/culling
-        mesh.boundingBox = null;
+    /** Triangles submitted per frame for parts and studs, for performance checks. */
+    triangleCount() {
+        let total = 0;
+        for (const b of [...this.bodyBatches.values(), ...this.studBatches.values()]) {
+            const index = b.geometry.index;
+            total += ((index ? index.count : b.geometry.attributes.position.count) / 3) * b.mesh.count;
+        }
+        return total;
+    }
+
+    dispose() {
+        [...this.bodyBatches.values(), ...this.studBatches.values()].forEach(b => b.dispose());
     }
 }
+
+/** @param {number} x @param {number} y @param {number} z */
+function cellKey(x, y, z) { return `${x},${y},${z}`; }
 
 // ---- helpers -----------------------------------------------------------------------------
 
@@ -588,33 +790,15 @@ function addLights(scene, span) {
 }
 
 /**
- * Baseplate top surface sits at y = 0, centred on the origin. Studs are one InstancedMesh.
+ * Baseplate slab, its top surface at y = 0 and centred on the origin. Its studs are drawn by
+ * PartRenderer, so the ones covered by parts can be hidden.
  * @param {ViewportOptions} o
  */
 function createBaseplate(o) {
-    const group = new THREE.Group();
     const material = new THREE.MeshStandardMaterial({ color: 0x237841, roughness: 0.45 });
-
     const thickness = o.plateHeight / 2;
     const slab = new THREE.Mesh(new THREE.BoxGeometry(o.baseplateWidth, thickness, o.baseplateDepth), material);
     slab.position.y = -thickness / 2;
     slab.receiveShadow = true;
-    group.add(slab);
-
-    const studGeometry = new THREE.CylinderGeometry(o.studDiameter / 2, o.studDiameter / 2, o.studHeight, 20);
-    studGeometry.translate(0, o.studHeight / 2, 0);
-    const studs = new THREE.InstancedMesh(studGeometry, material, o.baseplateWidth * o.baseplateDepth);
-    studs.castShadow = true;
-    studs.receiveShadow = true;
-
-    const m = new THREE.Matrix4();
-    let i = 0;
-    for (let x = 0; x < o.baseplateWidth; x++) {
-        for (let z = 0; z < o.baseplateDepth; z++) {
-            m.setPosition(x + 0.5 - o.baseplateWidth / 2, 0, z + 0.5 - o.baseplateDepth / 2);
-            studs.setMatrixAt(i++, m);
-        }
-    }
-    group.add(studs);
-    return group;
+    return { slab, material };
 }

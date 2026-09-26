@@ -81,11 +81,21 @@ public sealed class Build(Baseplate baseplate)
         return true;
     }
 
-    /// <summary>Puts back a part exactly as it was, for undo/redo. The history guarantees its space is free.</summary>
+    /// <summary>
+    /// Puts a part in exactly as given, keeping its id and skipping the connection rule: for undo/redo
+    /// and loading saved builds, where parts may legitimately float.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The part is off the baseplate or overlaps another.</exception>
     internal void Restore(PlacedPart part)
     {
+        var (sizeX, sizeZ) = part.Part.Footprint(part.Rotation);
+        var p = part.Position;
+        if (p.X < 0 || p.Y < 0 || p.Z < 0 || p.X + sizeX > Baseplate.WidthStuds || p.Z + sizeZ > Baseplate.DepthStuds)
+            throw new InvalidOperationException("it is outside the baseplate.");
         if (part.Cells().Any(_occupied.ContainsKey))
-            throw new InvalidOperationException($"Cannot restore part {part.Id}: its space is occupied.");
+            throw new InvalidOperationException("it overlaps another part.");
+        if (_parts.ContainsKey(part.Id))
+            throw new InvalidOperationException($"part id {part.Id} is already in use.");
         Insert(part);
         _nextId = Math.Max(_nextId, part.Id + 1);
     }

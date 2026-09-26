@@ -206,6 +206,56 @@ public class EditorTests
     }
 
     [Fact]
+    public void Replace_all_swaps_the_build_and_is_one_undo_step()
+    {
+        var old = PlaceAt(0, 0, 0);
+        var incoming = new PlacedPart(1, Brick2x2, new GridPos(8, 0, 8), Rotation.R0, Blue.Id);
+
+        _editor.ReplaceAll([incoming]);
+
+        Assert.Equal([incoming], _editor.Build.Parts);
+        Assert.Equal([old.Id], _changes.Last().Removed);
+        Assert.Equal([incoming], _changes.Last().Added);
+
+        _editor.Undo();
+        Assert.Equal([old], _editor.Build.Parts);
+    }
+
+    [Fact]
+    public void Clear_is_undoable()
+    {
+        PlaceAt(0, 0, 0);
+        PlaceAt(4, 0, 4);
+
+        _editor.Clear();
+        Assert.Empty(_editor.Build.Parts);
+
+        _editor.Undo();
+        Assert.Equal(2, _editor.Build.Parts.Count);
+    }
+
+    [Fact]
+    public void Clearing_an_empty_build_is_not_an_undo_step()
+    {
+        _editor.Clear();
+
+        Assert.False(_editor.CanUndo);
+    }
+
+    [Fact]
+    public void Forget_history_drops_undo_and_redo()
+    {
+        PlaceAt(0, 0, 0);
+        PlaceAt(4, 0, 4);
+        _editor.Undo();
+
+        _editor.ForgetHistory();
+
+        Assert.False(_editor.CanUndo);
+        Assert.False(_editor.CanRedo);
+    }
+
+    [Fact]
     public void Undo_while_carrying_cancels_first()
     {
         PlaceAt(0, 0, 0);

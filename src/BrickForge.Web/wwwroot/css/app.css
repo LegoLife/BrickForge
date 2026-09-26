@@ -311,28 +311,78 @@ h1:focus {
     fill: #9cc2ff;
 }
 
-.shortcuts {
-    margin-top: 16px;
-    font-size: 12px;
+/* --- Milestone 4: files, notices, controls bar --- */
+.file-row {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
 }
 
-    .shortcuts summary {
-        cursor: pointer;
-        opacity: 0.7;
+    .file-row > * {
+        flex: 1;
+        padding: 5px 0;
+        text-align: center;
     }
 
-    .shortcuts dl {
-        display: grid;
-        grid-template-columns: auto 1fr;
-        gap: 3px 10px;
-        margin: 8px 0 0;
+.panel .file-button {
+    border: 1px solid #2a3142;
+    border-radius: 4px;
+    background: #1d2330;
+    cursor: pointer;
+}
+
+    .panel .file-button:hover {
+        border-color: #4a5570;
     }
 
-    .shortcuts dt {
-        opacity: 0.7;
+    .file-button input[type=file] {
+        display: none;
+    }
+
+.notice {
+    margin: -4px 0 10px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: #1f2a3d;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+    .notice.error {
+        background: #3a1f24;
+        color: #ffb4b4;
+    }
+
+.stats .error {
+    color: #ff8a8a;
+}
+
+.controls-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    padding: 8px 12px;
+    background: rgba(15, 18, 26, 0.72);
+    border-bottom: 1px solid #2a3142;
+    font-size: 12px;
+    pointer-events: none;
+}
+
+    .controls-bar span {
         white-space: nowrap;
+        opacity: 0.85;
     }
 
-    .shortcuts dd {
-        margin: 0;
-    }
+kbd {
+    display: inline-block;
+    padding: 0 5px;
+    border: 1px solid #3a4459;
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    background: #1d2330;
+    font: 600 11px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}

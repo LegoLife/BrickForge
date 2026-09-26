@@ -56,7 +56,7 @@
         {
             await _viewport.InvokeVoidAsync("update", new
             {
-                added = change.Added.Select(ToDto).ToList(),
+                added = Flatten(change.Added),
                 removed = change.Removed,
                 tool = new
                 {
@@ -121,16 +121,30 @@
         }
     }
 
-    private static object ToDto(PlacedPart p) => new
+    private static readonly Dictionary<PartType, int> CatalogIndex =
+        PartCatalog.All.Select((part, i) => (part, i)).ToDictionary(x => x.part, x => x.i);
+
+    /// <summary>
+    /// Parts as one flat array of <c>[id, catalogIndex, x, y, z, rotation, colorId]</c> per part.
+    /// Loading a big build sends thousands of parts; plain ints marshal far faster than objects.
+    /// </summary>
+    private static int[] Flatten(IReadOnlyList<PlacedPart> parts)
     {
-        p.Id,
-        partId = p.Part.Id,
-        p.Position.X,
-        p.Position.Y,
-        p.Position.Z,
-        rotation = (int)p.Rotation,
-        p.ColorId,
-    };
+        var flat = new int[parts.Count * 7];
+        for (var i = 0; i < parts.Count; i++)
+        {
+            var p = parts[i];
+            var o = i * 7;
+            flat[o] = p.Id;
+            flat[o + 1] = CatalogIndex[p.Part];
+            flat[o + 2] = p.Position.X;
+            flat[o + 3] = p.Position.Y;
+            flat[o + 4] = p.Position.Z;
+            flat[o + 5] = (int)p.Rotation;
+            flat[o + 6] = p.ColorId;
+        }
+        return flat;
+    }
 
     public async ValueTask DisposeAsync()
     {

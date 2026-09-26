@@ -2,7 +2,9 @@
 @using System.Globalization
 @using BrickForge.Core
 @using BrickForge.Web.Components
+@using BrickForge.Web.Services
 @implements IDisposable
+@inject BuildStorage Storage
 
 <PageTitle>BrickForge</PageTitle>
 
@@ -15,6 +17,19 @@
                 <button title="Redo (Ctrl+Y)" disabled="@(!_editor.CanRedo)" @onclick="_editor.Redo">↷</button>
             </div>
         </header>
+
+        <div class="file-row">
+            <button title="Start an empty build (undoable)" @onclick="NewBuild">New</button>
+            <label class="file-button" title="Load a .json build file (undoable)">
+                Import
+                <InputFile accept=".json,application/json" OnChange="ImportAsync" />
+            </label>
+            <button title="Download this build as a .json file" @onclick="ExportAsync">Export</button>
+        </div>
+        @if (_notice is { } notice)
+        {
+            <p class="notice @(notice.IsError ? "error" : null)">@notice.Text</p>
+        }
 
         <div class="toolbar">
             <div class="segmented">
@@ -67,40 +82,161 @@
             }
         </div>
 
-        <details class="shortcuts">
-            <summary>Controls</summary>
-            <dl>
-                <dt>Click</dt><dd>Place (Build) / paint (Paint)</dd>
-                <dt>Right-click, Del</dt><dd>Remove part</dd>
-                <dt>Shift+click</dt><dd>Pick up part to move it</dd>
-                <dt>Alt+click, E</dt><dd>Eyedropper</dd>
-                <dt>R / Shift+R</dt><dd>Rotate</dd>
-                <dt>B / P</dt><dd>Build / Paint mode</dd>
-                <dt>Esc</dt><dd>Cancel move</dd>
-                <dt>Ctrl+Z / Ctrl+Y</dt><dd>Undo / redo</dd>
-                <dt>Right-drag</dt><dd>Orbit</dd>
-                <dt>Middle-drag</dt><dd>Pan</dd>
-                <dt>Wheel</dt><dd>Zoom</dd>
-            </dl>
-        </details>
-
-        <p class="stats">@_editor.Build.Parts.Count parts</p>
+        <p class="stats">
+            @_editor.Build.Parts.Count parts ·
+            <span class="@(_saveState == SaveState.Failed ? "error" : null)">@SaveStateText</span>
+        </p>
     </aside>
 
     <div class="stage">
         <Viewport Editor="_editor" />
+        <div class="controls-bar">
+            @foreach (var (keys, action) in Controls)
+            {
+                <span><kbd>@keys</kbd> @action</span>
+            }
+        </div>
     </div>
 </div>
 
 @code {
+    private static readonly (string Keys, string Action)[] Controls =
+    [
+        ("Click", "place / paint"),
+        ("Right-click · Del", "remove"),
+        ("Shift+click", "move"),
+        ("Alt+click · E", "eyedropper"),
+        ("R", "rotate"),
+        ("B · P", "build · paint"),
+        ("Esc", "cancel move"),
+        ("Ctrl+Z · Ctrl+Y", "undo · redo"),
+        ("Right-drag", "orbit"),
+        ("Middle-drag", "pan"),
+        ("Wheel", "zoom"),
+        ("F", "reset view"),
+    ];
+
+    private const long MaxImportBytes = 10 * 1024 * 1024;
+    private static readonly TimeSpan AutosaveDelay = TimeSpan.FromSeconds(1);
+
+    private enum SaveState { Loading, Saved, Pending, Failed }
+
+    private sealed record Notice(string Text, bool IsError = false);
+
     private readonly Editor _editor = new(new Build(Baseplate.Default));
+    private Notice? _notice;
+    private SaveState _saveState = SaveState.Loading;
+    private CancellationTokenSource? _pendingSave;
+
+    private string SaveStateText => _saveState switch
+    {
+        SaveState.Loading => "loading…",
+        SaveState.Pending => "saving…",
+        SaveState.Failed => "autosave failed",
+        _ => "saved",
+    };
 
     protected override void OnInitialized() => _editor.Changed += OnChanged;
 
-    private void OnChanged(BuildChange _) => StateHasChanged();
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await RestoreAutosaveAsync();
+    }
+
+    private void OnChanged(BuildChange change)
+    {
+        // Autosave only once restoring has finished, and only for changes to the build itself.
+        if (!change.IsEmpty && _saveState != SaveState.Loading) ScheduleAutosave();
+        StateHasChanged();
+    }
+
+    // ---- autosave -----------------------------------------------------------------------------
+
+    private async Task RestoreAutosaveAsync()
+    {
+        var json = await Storage.LoadAutosaveAsync();
+        if (json is not null)
+        {
+            try
+            {
+                _editor.ReplaceAll(BuildFile.Read(json, _editor.Build.Baseplate));
+                _editor.ForgetHistory();
+            }
+            catch (BuildFileException ex)
+            {
+                await Storage.SetAsideUnreadableAutosaveAsync(json);
+                _notice = new Notice($"Couldn't restore the last session ({ex.Message}) It was kept aside in browser storage.", IsError: true);
+            }
+        }
+        _saveState = SaveState.Saved;
+        StateHasChanged();
+    }
+
+    private void ScheduleAutosave()
+    {
+        _pendingSave?.Cancel();
+        _pendingSave = new CancellationTokenSource();
+        _saveState = SaveState.Pending;
+        _ = AutosaveAfterDelayAsync(_pendingSave.Token);
+    }
+
+    private async Task AutosaveAfterDelayAsync(CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(AutosaveDelay, token);
+        }
+        catch (OperationCanceledException)
+        {
+            return; // superseded by a newer change
+        }
+        var saved = await Storage.SaveAutosaveAsync(BuildFile.Write(_editor.Build));
+        if (token.IsCancellationRequested) return;
+        _saveState = saved ? SaveState.Saved : SaveState.Failed;
+        StateHasChanged();
+    }
+
+    // ---- files --------------------------------------------------------------------------------
+
+    private void NewBuild()
+    {
+        if (_editor.Build.Parts.Count == 0) return;
+        _editor.Clear();
+        _notice = new Notice("Started a new build. Ctrl+Z brings the old one back.");
+    }
+
+    private async Task ImportAsync(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            string json;
+            await using (var stream = e.File.OpenReadStream(MaxImportBytes))
+            using (var reader = new StreamReader(stream))
+            {
+                json = await reader.ReadToEndAsync();
+            }
+            var parts = BuildFile.Read(json, _editor.Build.Baseplate);
+            _editor.ReplaceAll(parts);
+            _notice = new Notice($"Imported {e.File.Name} ({parts.Count} parts). Ctrl+Z to undo.");
+        }
+        catch (BuildFileException ex)
+        {
+            _notice = new Notice($"Couldn't import {e.File.Name}: {ex.Message}", IsError: true);
+        }
+        catch (IOException)
+        {
+            _notice = new Notice($"Couldn't import {e.File.Name}: files over {MaxImportBytes / 1024 / 1024} MB aren't supported.", IsError: true);
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        var name = $"brickforge-{DateTime.Now:yyyy-MM-dd-HHmm}.json";
+        await Storage.DownloadAsync(name, BuildFile.Write(_editor.Build));
+        _notice = new Notice($"Exported {name}.");
+    }
 
     private static string? Active(bool active) => active ? "selected" : null;
-
     /// <summary>Top-down icon: the part's outline with a dot per stud (none for tiles).</summary>
     private static RenderFragment Footprint(PartType part) => builder =>
     {
@@ -135,5 +271,9 @@
 
     private static string N(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
 
-    public void Dispose() => _editor.Changed -= OnChanged;
+    public void Dispose()
+    {
+        _editor.Changed -= OnChanged;
+        _pendingSave?.Cancel();
+    }
 }
