@@ -157,6 +157,54 @@ public class BuildTests
     }
 
     [Fact]
+    public void Modify_moves_recolours_and_rotates_keeping_the_id()
+    {
+        var build = NewBuild();
+        var part = Place(build, Brick2x4, 0, 0, 0);
+
+        var result = build.Modify(part.Id, new GridPos(1, 0, 0), Rotation.R90, colorId: 7);
+
+        Assert.True(result.Success);
+        Assert.Equal(part with { Position = new GridPos(1, 0, 0), Rotation = Rotation.R90, ColorId = 7 }, result.Part);
+        Assert.Null(build.PartAt(new GridPos(0, 0, 3)));
+        Assert.Same(result.Part, build.PartAt(new GridPos(4, 0, 1)));
+    }
+
+    [Fact]
+    public void Rejected_modify_leaves_the_part_where_it_was()
+    {
+        var build = NewBuild();
+        var part = Place(build, Brick2x4, 0, 0, 0);
+
+        var result = build.Modify(part.Id, new GridPos(0, 9, 0), Rotation.R0, part.ColorId);
+
+        Assert.Equal(PlacementError.NotConnected, result.Error);
+        Assert.Same(part, build.PartAt(new GridPos(0, 0, 0)));
+    }
+
+    [Fact]
+    public void Check_can_ignore_a_part_being_moved()
+    {
+        var build = NewBuild();
+        var part = Place(build, Brick2x2, 0, 0, 0);
+        Place(build, Brick2x2, 0, 3, 0);
+
+        // Sliding the bottom brick sideways under the top one: it overlaps its own old cells only.
+        Assert.Equal(PlacementError.Overlaps, build.Check(Brick2x2, new GridPos(1, 0, 0), Rotation.R0));
+        Assert.Equal(PlacementError.None, build.Check(Brick2x2, new GridPos(1, 0, 0), Rotation.R0, ignorePartId: part.Id));
+    }
+
+    [Fact]
+    public void Part_cannot_connect_through_the_part_being_moved()
+    {
+        var build = NewBuild();
+        var part = Place(build, Brick2x2, 0, 0, 0);
+
+        Assert.Equal(PlacementError.NotConnected,
+            build.Check(Brick2x2, new GridPos(0, 3, 0), Rotation.R0, ignorePartId: part.Id));
+    }
+
+    [Fact]
     public void Part_at_finds_the_part_occupying_a_cell()
     {
         var build = NewBuild();

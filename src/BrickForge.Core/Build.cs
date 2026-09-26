@@ -32,17 +32,20 @@ public sealed class Build(Baseplate baseplate)
 
     public PlacedPart? PartAt(GridPos cell) => _occupied.GetValueOrDefault(cell);
 
-    public PlacementError Check(PartType part, GridPos position, Rotation rotation)
+    public PlacedPart? Find(int partId) => _parts.GetValueOrDefault(partId);
+
+    /// <param name="ignorePartId">A part being moved: its own cells neither block nor support the check.</param>
+    public PlacementError Check(PartType part, GridPos position, Rotation rotation, int? ignorePartId = null)
     {
         var (sizeX, sizeZ) = part.Footprint(rotation);
         if (position.X < 0 || position.Z < 0 || position.Y < 0 ||
             position.X + sizeX > Baseplate.WidthStuds || position.Z + sizeZ > Baseplate.DepthStuds)
             return PlacementError.OutOfBounds;
 
-        if (CellsOf(part, position, rotation).Any(_occupied.ContainsKey))
+        if (CellsOf(part, position, rotation).Any(cell => OccupantOf(cell, ignorePartId) is not null))
             return PlacementError.Overlaps;
 
-        return IsConnected(part, position, sizeX, sizeZ) ? PlacementError.None : PlacementError.NotConnected;
+        return IsConnected(part, position, sizeX, sizeZ, ignorePartId) ? PlacementError.None : PlacementError.NotConnected;
     }
 
     public PlaceResult TryPlace(PartType part, GridPos position, Rotation rotation, int colorId)
@@ -51,9 +54,23 @@ public sealed class Build(Baseplate baseplate)
         if (error != PlacementError.None) return new PlaceResult(null, error);
 
         var placed = new PlacedPart(_nextId++, part, position, rotation, colorId);
-        _parts.Add(placed.Id, placed);
-        foreach (var cell in placed.Cells()) _occupied.Add(cell, placed);
+        Insert(placed);
         return new PlaceResult(placed, PlacementError.None);
+    }
+
+    /// <summary>Moves, rotates and/or recolours a part in one step, keeping its id. The part stays put if rejected.</summary>
+    public PlaceResult Modify(int partId, GridPos position, Rotation rotation, int colorId)
+    {
+        if (!_parts.TryGetValue(partId, out var current))
+            throw new KeyNotFoundException($"No part with id {partId}.");
+
+        var error = Check(current.Part, position, rotation, ignorePartId: partId);
+        if (error != PlacementError.None) return new PlaceResult(null, error);
+
+        var updated = current with { Position = position, Rotation = rotation, ColorId = colorId };
+        Remove(partId);
+        Insert(updated);
+        return new PlaceResult(updated, PlacementError.None);
     }
 
     /// <summary>Removes a part. Parts that were only held by it are left in place.</summary>
@@ -64,7 +81,25 @@ public sealed class Build(Baseplate baseplate)
         return true;
     }
 
-    private bool IsConnected(PartType part, GridPos position, int sizeX, int sizeZ)
+    /// <summary>Puts back a part exactly as it was, for undo/redo. The history guarantees its space is free.</summary>
+    internal void Restore(PlacedPart part)
+    {
+        if (part.Cells().Any(_occupied.ContainsKey))
+            throw new InvalidOperationException($"Cannot restore part {part.Id}: its space is occupied.");
+        Insert(part);
+        _nextId = Math.Max(_nextId, part.Id + 1);
+    }
+
+    private void Insert(PlacedPart part)
+    {
+        _parts.Add(part.Id, part);
+        foreach (var cell in part.Cells()) _occupied.Add(cell, part);
+    }
+
+    private PlacedPart? OccupantOf(GridPos cell, int? ignorePartId) =>
+        _occupied.TryGetValue(cell, out var p) && p.Id != ignorePartId ? p : null;
+
+    private bool IsConnected(PartType part, GridPos position, int sizeX, int sizeZ, int? ignorePartId)
     {
         if (position.Y == 0) return true; // baseplate studs
 
@@ -74,10 +109,10 @@ public sealed class Build(Baseplate baseplate)
         for (var z = position.Z; z < position.Z + sizeZ; z++)
         {
             // The cell directly below is necessarily the top layer of whatever occupies it.
-            if (_occupied.TryGetValue(new GridPos(x, below, z), out var under) && under.Part.HasStuds)
+            if (OccupantOf(new GridPos(x, below, z), ignorePartId) is { Part.HasStuds: true })
                 return true;
             // Every part has anti-studs underneath; ours needs studs to push into them.
-            if (part.HasStuds && _occupied.ContainsKey(new GridPos(x, above, z)))
+            if (part.HasStuds && OccupantOf(new GridPos(x, above, z), ignorePartId) is not null)
                 return true;
         }
         return false;

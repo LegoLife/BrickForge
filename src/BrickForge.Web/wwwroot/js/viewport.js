@@ -71,8 +71,9 @@ export function createViewport(host, o, dotnet) {
     const materials = new ColorMaterials(o.colors);
     const parts = new PartBatches(scene, geometries, materials, o);
 
-    // ---- ghost preview -------------------------------------------------------------------
-    /** @type {{ partId: string, colorId: number, rotation: number } | null} */
+    // ---- tool, ghost & highlight -----------------------------------------------------------
+    /** @typedef {{ partId: string, colorId: number, rotation: number, mode: 'build' | 'paint' }} Tool */
+    /** @type {Tool | null} */
     let tool = null;
     const ghostBody = new THREE.MeshStandardMaterial({ transparent: true, opacity: 0.55, depthWrite: false });
     const ghostLine = new THREE.LineBasicMaterial({ color: VALID_COLOR });
@@ -102,6 +103,30 @@ export function createViewport(host, o, dotnet) {
         ghostLine.color.setHex(valid ? VALID_COLOR : INVALID_COLOR);
     }
 
+    // Outline around the part a click would act on (paint, eyedropper, pick up).
+    const unitBox = new THREE.BoxGeometry(1, 1, 1);
+    unitBox.translate(0, 0.5, 0);
+    const highlightMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+    const highlight = new THREE.LineSegments(new THREE.EdgesGeometry(unitBox), highlightMaterial);
+    unitBox.dispose();
+    highlight.visible = false;
+    scene.add(highlight);
+
+    const modifiers = { alt: false, shift: false };
+
+    /** Whether a click would act on the hovered part rather than place the ghost. */
+    const targetingPart = () => tool?.mode === 'paint' || modifiers.alt || modifiers.shift;
+
+    function updateHighlight() {
+        const rec = hoveredPartId !== null && targetingPart() ? parts.record(hoveredPartId) : undefined;
+        highlight.visible = !!rec;
+        canvas.style.cursor = rec ? 'pointer' : '';
+        if (!rec) return;
+        const pad = 0.04;
+        highlight.scale.set(rec.sx + pad, rec.h * PH + o.studHeight + pad, rec.sz + pad);
+        highlight.position.set(rec.x + rec.sx / 2 - W / 2, rec.y * PH - pad / 2, rec.z + rec.sz / 2 - D / 2);
+    }
+
     // ---- hover & candidate ---------------------------------------------------------------
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -115,9 +140,11 @@ export function createViewport(host, o, dotnet) {
     function updateHover() {
         const hit = pointerInside ? raycast() : null;
         hoveredPartId = hit?.partId ?? null;
+        updateHighlight();
 
-        const def = tool && partDefs.get(tool.partId);
-        const next = hit && def && tool ? candidateFor(hit, def, tool.rotation) : null;
+        const def = tool?.mode === 'build' ? partDefs.get(tool.partId) : undefined;
+        const aimingAtPart = hoveredPartId !== null && (modifiers.alt || modifiers.shift);
+        const next = hit && def && tool && !aimingAtPart ? candidateFor(hit, def, tool.rotation) : null;
         if (sameCell(next, candidate)) return;
 
         candidate = next;
@@ -194,6 +221,11 @@ export function createViewport(host, o, dotnet) {
     }
 
     // ---- input ---------------------------------------------------------------------------
+    // C# decides what a click or key means (place, paint, eyedrop, pick up, undo...);
+    // this side only reports where the pointer is and which modifiers are held.
+    const PLAIN_KEYS = new Set(['r', 'b', 'p', 'e', 'escape', 'delete', 'backspace']);
+    const CTRL_KEYS = new Set(['z', 'y']);
+
     /** @type {{ x: number, y: number, button: number } | null} */
     let press = null;
 
@@ -202,6 +234,7 @@ export function createViewport(host, o, dotnet) {
         const rect = canvas.getBoundingClientRect();
         pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
         pointerInside = true;
+        setModifiers(e);
         updateHover();
     }
 
@@ -222,9 +255,8 @@ export function createViewport(host, o, dotnet) {
         if (!p || p.button !== e.button) return;
         if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > CLICK_TOLERANCE_PX) return; // was a drag
 
-        if (e.button === 0 && candidate && ghost.visible) {
-            const { x, y, z } = candidate;
-            await call('Place', x, y, z);
+        if (e.button === 0) {
+            await call('Click', candidate, hoveredPartId, e.altKey, e.shiftKey);
         } else if (e.button === 2 && hoveredPartId !== null) {
             await call('Remove', hoveredPartId);
         }
@@ -233,13 +265,33 @@ export function createViewport(host, o, dotnet) {
     /** @param {KeyboardEvent} e */
     async function onKeyDown(e) {
         if (isTyping(e)) return;
-        if ((e.key === 'Delete' || e.key === 'Backspace') && hoveredPartId !== null) {
-            e.preventDefault();
-            await call('Remove', hoveredPartId);
-        }
+        setModifiers(e);
+        const key = e.key.toLowerCase();
+        const ctrl = e.ctrlKey || e.metaKey;
+        if (!(ctrl ? CTRL_KEYS.has(key) : PLAIN_KEYS.has(key))) return;
+        e.preventDefault();
+        await call('Key', key, ctrl, e.shiftKey, hoveredPartId);
     }
 
-    /** Re-evaluate what's under a stationary cursor after the scene changed. */
+    /** @param {KeyboardEvent} e */
+    function onKeyUp(e) {
+        setModifiers(e);
+        if (e.key === 'Alt') e.preventDefault(); // stop Windows focusing the browser menu
+    }
+
+    function onBlur() {
+        setModifiers({ altKey: false, shiftKey: false });
+    }
+
+    /** @param {{ altKey: boolean, shiftKey: boolean }} e */
+    function setModifiers(e) {
+        if (modifiers.alt === e.altKey && modifiers.shift === e.shiftKey) return;
+        modifiers.alt = e.altKey;
+        modifiers.shift = e.shiftKey;
+        refreshHover();
+    }
+
+    /** Re-evaluate what's under a stationary cursor after the scene or tool changed. */
     function refreshHover() {
         candidate = null;
         hoverSeq++;
@@ -251,6 +303,8 @@ export function createViewport(host, o, dotnet) {
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointerup', onPointerUp);
     window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
     controls.addEventListener('change', () => { if (pointerInside) refreshHover(); });
 
     // ---- lifecycle -----------------------------------------------------------------------
@@ -271,27 +325,24 @@ export function createViewport(host, o, dotnet) {
     });
 
     return {
-        /** @param {{ partId: string, colorId: number, rotation: number }} next */
-        setTool(next) {
+        /**
+         * Applies one change from C#: removals first, then additions, then the current tool.
+         * @param {{ added: PlacedDto[], removed: number[], tool: Tool }} update
+         */
+        update({ added, removed, tool: next }) {
+            for (const id of removed) parts.remove(id);
+            for (const dto of added) parts.add(dto);
             const shapeChanged = !tool || tool.partId !== next.partId || tool.rotation !== next.rotation;
             tool = next;
             if (shapeChanged) rebuildGhost();
-            refreshHover();
-        },
-        /** @param {PlacedDto[]} added */
-        addParts(added) {
-            for (const dto of added) parts.add(dto);
-            refreshHover();
-        },
-        /** @param {number[]} ids */
-        removeParts(ids) {
-            for (const id of ids) parts.remove(id);
             refreshHover();
         },
         dispose() {
             renderer.setAnimationLoop(null);
             resizeObserver.disconnect();
             window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('keyup', onKeyUp);
+            window.removeEventListener('blur', onBlur);
             controls.dispose();
             scene.traverse(obj => {
                 if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) obj.geometry.dispose();
@@ -300,6 +351,7 @@ export function createViewport(host, o, dotnet) {
             materials.dispose();
             ghostBody.dispose();
             ghostLine.dispose();
+            highlightMaterial.dispose();
             renderer.dispose();
             canvas.remove();
         },

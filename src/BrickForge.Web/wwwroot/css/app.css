@@ -116,10 +116,7 @@ html, body {
     font-size: 13px;
 }
 
-    .panel h1 {
-        margin: 0 0 8px;
-        font-size: 18px;
-    }
+
 
     .panel h2 {
         margin: 16px 0 6px;
@@ -136,33 +133,13 @@ html, body {
     gap: 4px;
 }
 
-.part {
-    padding: 5px 0;
-    border: 1px solid #2a3142;
-    border-radius: 4px;
-    background: #1d2330;
-    color: inherit;
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-}
-
-    .part:hover {
-        border-color: #4a5570;
-    }
-
-    .part.selected {
-        border-color: #5b9cff;
-        background: #23324d;
-    }
-
 .swatches {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
     gap: 5px;
 }
 
-.swatch {
+.panel .swatch {
     aspect-ratio: 1;
     border: 2px solid transparent;
     border-radius: 4px;
@@ -170,12 +147,12 @@ html, body {
     cursor: pointer;
 }
 
-    .swatch.trans {
+    .panel .swatch.trans {
         background: linear-gradient(135deg, var(--swatch) 55%, rgba(255, 255, 255, 0.25) 55%);
         opacity: 0.8;
     }
 
-    .swatch.selected {
+    .panel .swatch.selected {
         border-color: #fff;
         box-shadow: 0 0 0 1px #151a24 inset;
     }
@@ -202,19 +179,160 @@ html, body {
         height: 100%;
     }
 
-.hud {
-    position: absolute;
-    top: 12px;
-    left: 12px;
-    padding: 6px 12px;
-    border-radius: 6px;
-    background: rgba(15, 18, 26, 0.7);
-    font-size: 12px;
-    opacity: 0.85;
-    pointer-events: none;
-}
-
 h1:focus {
     outline: none;
 }
 
+
+/* --- Milestone 3 panel --- */
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+    .panel-header h1 {
+        margin: 0;
+        font-size: 18px;
+    }
+
+.panel button {
+    border: 1px solid #2a3142;
+    border-radius: 4px;
+    background: #1d2330;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+    .panel button:hover:not(:disabled) {
+        border-color: #4a5570;
+    }
+
+    .panel button:disabled {
+        opacity: 0.35;
+        cursor: default;
+    }
+
+    .panel button.selected {
+        border-color: #5b9cff;
+        background: #23324d;
+    }
+
+.icon-buttons {
+    display: flex;
+    gap: 4px;
+}
+
+    .icon-buttons button {
+        width: 30px;
+        height: 28px;
+        font-size: 16px;
+    }
+
+.toolbar {
+    display: flex;
+    gap: 6px;
+}
+
+.segmented {
+    display: flex;
+    flex: 1;
+}
+
+    .segmented button {
+        flex: 1;
+        padding: 6px 0;
+    }
+
+        .segmented button:first-child {
+            border-radius: 4px 0 0 4px;
+        }
+
+        .segmented button:last-child {
+            border-left: none;
+            border-radius: 0 4px 4px 0;
+        }
+
+.rotate {
+    padding: 6px 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.status {
+    min-height: 1.4em;
+    margin: 10px 0 0;
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+    .status .carrying {
+        color: #ffd166;
+    }
+
+.part-grid {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.part {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 5px 0 4px;
+}
+
+    .part span {
+        font-size: 11px;
+    }
+
+.footprint {
+    width: 34px;
+    height: 26px;
+}
+
+    .footprint rect {
+        fill: #3a4459;
+        stroke: #8a95ad;
+        stroke-width: 0.6;
+    }
+
+    .footprint circle {
+        fill: #8a95ad;
+    }
+
+.part.selected .footprint rect {
+    fill: #35507f;
+    stroke: #9cc2ff;
+}
+
+.part.selected .footprint circle {
+    fill: #9cc2ff;
+}
+
+.shortcuts {
+    margin-top: 16px;
+    font-size: 12px;
+}
+
+    .shortcuts summary {
+        cursor: pointer;
+        opacity: 0.7;
+    }
+
+    .shortcuts dl {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 3px 10px;
+        margin: 8px 0 0;
+    }
+
+    .shortcuts dt {
+        opacity: 0.7;
+        white-space: nowrap;
+    }
+
+    .shortcuts dd {
+        margin: 0;
+    }

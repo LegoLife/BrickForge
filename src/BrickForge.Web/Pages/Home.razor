@@ -1,12 +1,47 @@
 @page "/"
+@using System.Globalization
 @using BrickForge.Core
 @using BrickForge.Web.Components
+@implements IDisposable
 
 <PageTitle>BrickForge</PageTitle>
 
 <div class="workspace">
     <aside class="panel">
-        <h1>BrickForge</h1>
+        <header class="panel-header">
+            <h1>BrickForge</h1>
+            <div class="icon-buttons">
+                <button title="Undo (Ctrl+Z)" disabled="@(!_editor.CanUndo)" @onclick="_editor.Undo">↶</button>
+                <button title="Redo (Ctrl+Y)" disabled="@(!_editor.CanRedo)" @onclick="_editor.Redo">↷</button>
+            </div>
+        </header>
+
+        <div class="toolbar">
+            <div class="segmented">
+                <button class="@Active(_editor.Mode == EditorMode.Build)" title="Build (B)"
+                        @onclick="() => _editor.SetMode(EditorMode.Build)">Build</button>
+                <button class="@Active(_editor.Mode == EditorMode.Paint)" title="Paint (P)"
+                        @onclick="() => _editor.SetMode(EditorMode.Paint)">Paint</button>
+            </div>
+            <button class="rotate" title="Rotate (R / Shift+R)" @onclick="() => _editor.Rotate(1)">
+                ⟳ @((int)_editor.Rotation * 90)°
+            </button>
+        </div>
+
+        <p class="status">
+            @if (_editor.Carrying is not null)
+            {
+                <span class="carrying">Moving — click to drop, Esc to cancel</span>
+            }
+            else if (_editor.Mode == EditorMode.Paint)
+            {
+                <span>Click parts to paint them <strong>@_editor.Color.Name</strong></span>
+            }
+            else
+            {
+                <span>@_editor.Part.Name · @_editor.Color.Name</span>
+            }
+        </p>
 
         @foreach (var group in PartCatalog.All.GroupBy(p => p.Kind))
         {
@@ -14,8 +49,10 @@
             <div class="part-grid">
                 @foreach (var part in group)
                 {
-                    <button class="part @(part == _part ? "selected" : null)" @onclick="() => _part = part">
-                        @part.Width×@part.Depth
+                    <button class="part @Active(part == _editor.Part && _editor.Mode == EditorMode.Build)"
+                            title="@part.Name" @onclick="() => _editor.SelectPart(part)">
+                        @Footprint(part)
+                        <span>@part.Width×@part.Depth</span>
                     </button>
                 }
             </div>
@@ -25,24 +62,78 @@
         <div class="swatches">
             @foreach (var color in Palette.All)
             {
-                <button class="swatch @(color == _color ? "selected" : null) @(color.IsTransparent ? "trans" : null)"
-                        style="--swatch: @color.Hex" title="@color.Name" @onclick="() => _color = color"></button>
+                <button class="swatch @Active(color == _editor.Color) @(color.IsTransparent ? "trans" : null)"
+                        style="--swatch: @color.Hex" title="@color.Name" @onclick="() => _editor.SelectColor(color)"></button>
             }
         </div>
 
-        <p class="stats">@_build.Parts.Count parts</p>
+        <details class="shortcuts">
+            <summary>Controls</summary>
+            <dl>
+                <dt>Click</dt><dd>Place (Build) / paint (Paint)</dd>
+                <dt>Right-click, Del</dt><dd>Remove part</dd>
+                <dt>Shift+click</dt><dd>Pick up part to move it</dd>
+                <dt>Alt+click, E</dt><dd>Eyedropper</dd>
+                <dt>R / Shift+R</dt><dd>Rotate</dd>
+                <dt>B / P</dt><dd>Build / Paint mode</dd>
+                <dt>Esc</dt><dd>Cancel move</dd>
+                <dt>Ctrl+Z / Ctrl+Y</dt><dd>Undo / redo</dd>
+                <dt>Right-drag</dt><dd>Orbit</dd>
+                <dt>Middle-drag</dt><dd>Pan</dd>
+                <dt>Wheel</dt><dd>Zoom</dd>
+            </dl>
+        </details>
+
+        <p class="stats">@_editor.Build.Parts.Count parts</p>
     </aside>
 
     <div class="stage">
-        <Viewport Build="_build" Part="_part" Color="_color" BuildChanged="StateHasChanged" />
-        <div class="hud">
-            Click: place · Right-click / Del: remove · Right-drag: orbit · Middle-drag: pan · Wheel: zoom
-        </div>
+        <Viewport Editor="_editor" />
     </div>
 </div>
 
 @code {
-    private readonly Build _build = new(Baseplate.Default);
-    private PartType _part = PartCatalog.Get("brick-2x4");
-    private BrickColor _color = Palette.All[0];
+    private readonly Editor _editor = new(new Build(Baseplate.Default));
+
+    protected override void OnInitialized() => _editor.Changed += OnChanged;
+
+    private void OnChanged(BuildChange _) => StateHasChanged();
+
+    private static string? Active(bool active) => active ? "selected" : null;
+
+    /// <summary>Top-down icon: the part's outline with a dot per stud (none for tiles).</summary>
+    private static RenderFragment Footprint(PartType part) => builder =>
+    {
+        const double width = 34, height = 26, unit = width / 8; // fits 8 long by 6 wide
+        var (w, d) = (part.Depth * unit, part.Width * unit);     // long side horizontal
+        var (ox, oy) = ((width - w) / 2, (height - d) / 2);
+
+        builder.OpenElement(0, "svg");
+        builder.AddAttribute(1, "viewBox", $"0 0 {N(width)} {N(height)}");
+        builder.AddAttribute(2, "class", "footprint");
+        builder.OpenElement(3, "rect");
+        builder.AddAttribute(4, "x", N(ox));
+        builder.AddAttribute(5, "y", N(oy));
+        builder.AddAttribute(6, "width", N(w));
+        builder.AddAttribute(7, "height", N(d));
+        builder.AddAttribute(8, "rx", "0.6");
+        builder.CloseElement();
+        if (part.HasStuds)
+        {
+            for (var i = 0; i < part.Depth; i++)
+            for (var j = 0; j < part.Width; j++)
+            {
+                builder.OpenElement(9, "circle");
+                builder.AddAttribute(10, "cx", N(ox + (i + 0.5) * unit));
+                builder.AddAttribute(11, "cy", N(oy + (j + 0.5) * unit));
+                builder.AddAttribute(12, "r", N(unit * 0.3));
+                builder.CloseElement();
+            }
+        }
+        builder.CloseElement();
+    };
+
+    private static string N(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    public void Dispose() => _editor.Changed -= OnChanged;
 }

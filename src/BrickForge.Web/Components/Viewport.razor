@@ -5,79 +5,136 @@
 <div class="viewport" @ref="_host"></div>
 
 @code {
-    [Parameter, EditorRequired] public Build Build { get; set; } = default!;
-    [Parameter, EditorRequired] public PartType Part { get; set; } = default!;
-    [Parameter, EditorRequired] public BrickColor Color { get; set; } = default!;
-    [Parameter] public Rotation Rotation { get; set; }
-    [Parameter] public EventCallback BuildChanged { get; set; }
+    [Parameter, EditorRequired] public Editor Editor { get; set; } = default!;
 
     private ElementReference _host;
     private IJSObjectReference? _module;
     private IJSObjectReference? _viewport;
     private DotNetObjectReference<Viewport>? _self;
-    private (PartType, BrickColor, Rotation)? _sentTool;
+    private Editor? _subscribed;
+
+    protected override void OnParametersSet()
+    {
+        if (_subscribed == Editor) return;
+        if (_subscribed is not null) _subscribed.Changed -= OnEditorChanged;
+        Editor.Changed += OnEditorChanged;
+        _subscribed = Editor;
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        if (!firstRender) return;
+
+        var build = Editor.Build;
+        _self = DotNetObjectReference.Create(this);
+        _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/viewport.js");
+        _viewport = await _module.InvokeAsync<IJSObjectReference>("createViewport", _host, new
         {
-            _self = DotNetObjectReference.Create(this);
-            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/viewport.js");
-            _viewport = await _module.InvokeAsync<IJSObjectReference>("createViewport", _host, new
+            baseplateWidth = build.Baseplate.WidthStuds,
+            baseplateDepth = build.Baseplate.DepthStuds,
+            plateHeight = LegoUnits.PlateHeight,
+            studDiameter = LegoUnits.StudDiameter,
+            studHeight = LegoUnits.StudHeight,
+            partInset = LegoUnits.PartInset,
+            parts = PartCatalog.All.Select(p => new { p.Id, p.Width, p.Depth, p.HeightPlates, p.HasStuds }),
+            colors = Palette.All.Select(c => new { c.Id, c.Hex, c.IsTransparent }),
+        }, _self);
+
+        await SendAsync(new BuildChange([.. build.Parts], []));
+    }
+
+    /// <summary>
+    /// Forwards every editor change to JS. Each call is dispatched synchronously, so JS receives
+    /// changes in the order the editor raised them even though we don't await here.
+    /// </summary>
+    private void OnEditorChanged(BuildChange change) => _ = SendAsync(change);
+
+    private async Task SendAsync(BuildChange change)
+    {
+        if (_viewport is null) return;
+        try
+        {
+            await _viewport.InvokeVoidAsync("update", new
             {
-                baseplateWidth = Build.Baseplate.WidthStuds,
-                baseplateDepth = Build.Baseplate.DepthStuds,
-                plateHeight = LegoUnits.PlateHeight,
-                studDiameter = LegoUnits.StudDiameter,
-                studHeight = LegoUnits.StudHeight,
-                partInset = LegoUnits.PartInset,
-                parts = PartCatalog.All.Select(p => new { p.Id, p.Width, p.Depth, p.HeightPlates, p.HasStuds }),
-                colors = Palette.All.Select(c => new { c.Id, c.Hex, c.IsTransparent }),
-            }, _self);
-            await _viewport.InvokeVoidAsync("addParts", Build.Parts.Select(ToDto).ToList());
+                added = change.Added.Select(ToDto).ToList(),
+                removed = change.Removed,
+                tool = new
+                {
+                    partId = Editor.Part.Id,
+                    colorId = Editor.Color.Id,
+                    rotation = (int)Editor.Rotation,
+                    mode = Editor.Mode == EditorMode.Paint ? "paint" : "build",
+                },
+            });
         }
-
-        await SyncToolAsync();
+        catch (JSDisconnectedException)
+        {
+            // Page is going away.
+        }
     }
 
-    private async Task SyncToolAsync()
+    // ---- input from JS ----------------------------------------------------------------------
+
+    public sealed record CellDto(int X, int Y, int Z);
+
+    [JSInvokable]
+    public bool CanPlace(int x, int y, int z) => Editor.CanPlaceAt(new GridPos(x, y, z));
+
+    [JSInvokable]
+    public void Click(CellDto? cell, int? partId, bool alt, bool shift)
     {
-        if (_viewport is null || _sentTool == (Part, Color, Rotation)) return;
-        _sentTool = (Part, Color, Rotation);
-        await _viewport.InvokeVoidAsync("setTool", new { partId = Part.Id, colorId = Color.Id, rotation = (int)Rotation });
+        switch (partId)
+        {
+            case { } id when alt:
+                Editor.Eyedrop(id);
+                break;
+            case { } id when shift:
+                Editor.PickUp(id);
+                break;
+            case { } id when Editor.Mode == EditorMode.Paint:
+                Editor.Paint(id);
+                break;
+            default:
+                if (cell is not null) Editor.PlaceAt(new GridPos(cell.X, cell.Y, cell.Z));
+                break;
+        }
     }
 
     [JSInvokable]
-    public bool CanPlace(int x, int y, int z) =>
-        Build.Check(Part, new GridPos(x, y, z), Rotation) == PlacementError.None;
+    public void Remove(int partId) => Editor.Remove(partId);
 
+    /// <param name="key">Lower-cased <c>KeyboardEvent.key</c>.</param>
     [JSInvokable]
-    public async Task Place(int x, int y, int z)
+    public void Key(string key, bool ctrl, bool shift, int? hoveredPartId)
     {
-        var result = Build.TryPlace(Part, new GridPos(x, y, z), Rotation, Color.Id);
-        if (!result.Success || _viewport is null) return;
-
-        // A bare array would bind to InvokeVoidAsync's params object[] and be spread into separate arguments.
-        await _viewport.InvokeVoidAsync("addParts", new List<PartDto> { ToDto(result.Part!) });
-        await BuildChanged.InvokeAsync();
+        switch (key, ctrl)
+        {
+            case ("z", true) when shift: Editor.Redo(); break;
+            case ("z", true): Editor.Undo(); break;
+            case ("y", true): Editor.Redo(); break;
+            case ("r", false): Editor.Rotate(shift ? -1 : 1); break;
+            case ("b", false): Editor.SetMode(EditorMode.Build); break;
+            case ("p", false): Editor.SetMode(EditorMode.Paint); break;
+            case ("escape", false): Editor.Cancel(); break;
+            case ("e", false) when hoveredPartId is { } id: Editor.Eyedrop(id); break;
+            case ("delete" or "backspace", false) when hoveredPartId is { } id: Editor.Remove(id); break;
+        }
     }
 
-    [JSInvokable]
-    public async Task Remove(int partId)
+    private static object ToDto(PlacedPart p) => new
     {
-        if (!Build.Remove(partId) || _viewport is null) return;
-
-        await _viewport.InvokeVoidAsync("removeParts", new List<int> { partId });
-        await BuildChanged.InvokeAsync();
-    }
-
-    private sealed record PartDto(int Id, string PartId, int X, int Y, int Z, int Rotation, int ColorId);
-
-    private static PartDto ToDto(PlacedPart p) =>
-        new(p.Id, p.Part.Id, p.Position.X, p.Position.Y, p.Position.Z, (int)p.Rotation, p.ColorId);
+        p.Id,
+        partId = p.Part.Id,
+        p.Position.X,
+        p.Position.Y,
+        p.Position.Z,
+        rotation = (int)p.Rotation,
+        p.ColorId,
+    };
 
     public async ValueTask DisposeAsync()
     {
+        if (_subscribed is not null) _subscribed.Changed -= OnEditorChanged;
         try
         {
             if (_viewport is not null)
