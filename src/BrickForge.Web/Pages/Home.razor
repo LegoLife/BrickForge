@@ -50,7 +50,11 @@
         </div>
 
         <p class="status">
-            @if (_editor.Held is { IsPaste: true } paste)
+            @if (_editor.Held is { IsPaste: true, Label: { } label } placing)
+            {
+                <span class="carrying">Placing @label (@Parts(placing.Group.Parts.Count)) — click to stamp, R to rotate, Esc to stop</span>
+            }
+            else if (_editor.Held is { IsPaste: true } paste)
             {
                 <span class="carrying">Pasting @Parts(paste.Group.Parts.Count) — click to stamp, R to rotate, Esc to stop</span>
             }
@@ -80,6 +84,61 @@
                 <button title="Paste (Ctrl+V)" disabled="@(!_editor.HasClipboard)" @onclick="_editor.Paste">Paste</button>
                 <button title="Delete selection (Del)" disabled="@(_editor.Selection.Count == 0)" @onclick="_editor.DeleteSelection">Delete</button>
             </div>
+            <button class="save-component" disabled="@(_editor.Selection.Count == 0)"
+                    title="Save the selected parts as a reusable component" @onclick="OpenSaveComponent">
+                Save as component…
+            </button>
+        </div>
+
+        <div class="section-header">
+            <h2>Components</h2>
+            <div class="section-actions">
+                <label class="file-button" title="Add components from a .json library file">
+                    Import
+                    <InputFile accept=".json,application/json" OnChange="ImportComponentsAsync" />
+                </label>
+                <button title="Download the component library as a .json file" disabled="@(_library.Components.Count == 0)"
+                        @onclick="ExportComponentsAsync">Export</button>
+            </div>
+        </div>
+        @if (_library.Components.Count == 0)
+        {
+            <p class="empty-hint">Select some parts and choose <em>Save as component…</em> to reuse them here.</p>
+        }
+        <div class="component-grid">
+            @foreach (var component in _library.Components)
+            {
+                <div class="component-card @Active(_editor.Held?.Label == component.Name && _editor.Held.IsPaste)"
+                     draggable="true" data-brickforge-drag title="Click or drag to place @component.Name"
+                     @onclick="() => _editor.Hold(component.Group, component.Name)"
+                     @ondragstart="() => _editor.Hold(component.Group, component.Name)">
+                    @if (_thumbnails.TryGetValue(component.Group, out var thumbnail))
+                    {
+                        <img src="@thumbnail" alt="" draggable="false" />
+                    }
+                    else
+                    {
+                        <div class="thumbnail-placeholder"></div>
+                    }
+                    <span class="component-name">@component.Name</span>
+                    <span class="component-count">@Parts(component.Group.Parts.Count)</span>
+                    @if (_confirmDeleteId == component.Id)
+                    {
+                        <div class="component-confirm" @onclick:stopPropagation>
+                            <span>Delete?</span>
+                            <button @onclick="() => DeleteComponent(component.Id)">Yes</button>
+                            <button @onclick="() => _confirmDeleteId = null">No</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="component-actions" @onclick:stopPropagation>
+                            <button title="Rename" @onclick="() => OpenRenameComponent(component)">✎</button>
+                            <button title="Delete" @onclick="() => _confirmDeleteId = component.Id">✕</button>
+                        </div>
+                    }
+                </div>
+            }
         </div>
 
         @foreach (var group in PartCatalog.All.GroupBy(p => p.Kind))
@@ -89,7 +148,8 @@
                 @foreach (var part in group)
                 {
                     <button class="part @Active(part == _editor.Part && _editor.Mode == EditorMode.Build && _editor.Held is null)"
-                            title="@part.Name" @onclick="() => _editor.SelectPart(part)">
+                            title="@part.Name — click or drag onto the baseplate" @onclick="() => _editor.SelectPart(part)"
+                            draggable="true" data-brickforge-drag @ondragstart="() => _editor.SelectPart(part)">
                         @Footprint(part)
                         <span>@part.Width×@part.Depth</span>
                     </button>
@@ -113,7 +173,7 @@
     </aside>
 
     <div class="stage">
-        <Viewport Editor="_editor" />
+        <Viewport Editor="_editor" @ref="_viewport" />
         <div class="controls-bar">
             @foreach (var (keys, action) in Controls)
             {
@@ -137,10 +197,17 @@
         break;
 }
 
+@if (_nameDialog is { } dialog)
+{
+    <NameDialog Title="@dialog.Title" ConfirmLabel="@dialog.ConfirmLabel" Description="@dialog.Description"
+                Initial="@dialog.Initial" OnConfirm="ConfirmName" OnCancel="() => _nameDialog = null" />
+}
+
 @code {
     private static readonly (string Keys, string Action)[] Controls =
     [
         ("Click", "place / paint / select"),
+        ("Drag from panel", "place part or component"),
         ("Right-click · Del", "remove"),
         ("Shift+click", "move (whole selection if selected)"),
         ("Alt+click · E", "eyedropper"),
@@ -173,6 +240,19 @@
     private SaveState _saveState = SaveState.Loading;
     private CancellationTokenSource? _pendingSave;
 
+    private const int ThumbnailWidth = 160, ThumbnailHeight = 120;
+
+    private readonly ComponentLibrary _library = new();
+    /// <summary>Rendered on demand and kept in memory only, keyed by group (renaming keeps the picture).</summary>
+    private readonly Dictionary<PartGroup, string> _thumbnails = [];
+    private bool _libraryLoaded;
+    private Viewport? _viewport;
+    private NameDialogState? _nameDialog;
+    private string? _confirmDeleteId;
+
+    /// <param name="RenameId">The component being renamed; null when saving a new one.</param>
+    private sealed record NameDialogState(string Title, string ConfirmLabel, string Initial, string? Description, string? RenameId);
+
     private string SaveStateText => _saveState switch
     {
         SaveState.Loading => "loading…",
@@ -185,7 +265,10 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender) await RestoreAutosaveAsync();
+        if (!firstRender) return;
+        _library.Changed += OnLibraryChanged;
+        await RestoreAutosaveAsync();
+        await LoadComponentsAsync();
     }
 
     private void OnChanged(BuildChange change)
@@ -240,6 +323,120 @@
         if (token.IsCancellationRequested) return;
         _saveState = saved ? SaveState.Saved : SaveState.Failed;
         StateHasChanged();
+    }
+
+    // ---- components ---------------------------------------------------------------------------
+
+    private async Task LoadComponentsAsync()
+    {
+        var json = await Storage.LoadComponentsAsync();
+        if (json is not null)
+        {
+            try
+            {
+                _library.Import(ComponentFile.Read(json));
+            }
+            catch (BuildFileException ex)
+            {
+                await Storage.SetAsideUnreadableComponentsAsync(json);
+                _notice = new Notice($"Couldn't load your components ({ex.Message}) They were kept aside in browser storage.", IsError: true);
+            }
+        }
+        _libraryLoaded = true;
+        StateHasChanged();
+        await RenderMissingThumbnailsAsync();
+    }
+
+    private void OnLibraryChanged()
+    {
+        if (_libraryLoaded) _ = SaveComponentsAsync();
+        _ = RenderMissingThumbnailsAsync();
+        StateHasChanged();
+    }
+
+    private async Task SaveComponentsAsync()
+    {
+        if (!await Storage.SaveComponentsAsync(ComponentFile.Write(_library.Components)))
+        {
+            _notice = new Notice("Couldn't save your components: browser storage is full or disabled. Export them to keep them.", IsError: true);
+            StateHasChanged();
+        }
+    }
+
+    private async Task RenderMissingThumbnailsAsync()
+    {
+        if (_viewport is null) return;
+        foreach (var component in _library.Components.ToList())
+        {
+            if (_thumbnails.ContainsKey(component.Group)) continue;
+            _thumbnails[component.Group] = await _viewport.RenderThumbnailAsync(component.Group, ThumbnailWidth, ThumbnailHeight);
+            StateHasChanged();
+        }
+    }
+
+    private void OpenSaveComponent()
+    {
+        if (_editor.Selection.Count == 0) return;
+        _nameDialog = new NameDialogState(
+            "Save as component", "Save", $"Component {_library.Components.Count + 1}",
+            $"Saves the {Parts(_editor.Selection.Count)} you have selected so you can place them again from the panel.",
+            RenameId: null);
+    }
+
+    private void OpenRenameComponent(Component component) =>
+        _nameDialog = new NameDialogState("Rename component", "Rename", component.Name, null, component.Id);
+
+    private void ConfirmName(string name)
+    {
+        if (_nameDialog?.RenameId is { } id)
+        {
+            _library.Rename(id, name);
+        }
+        else
+        {
+            var parts = _editor.Selection.Select(_editor.Build.Find).OfType<PlacedPart>().OrderBy(p => p.Id).ToList();
+            if (parts.Count == 0) return;
+            var component = _library.Add(name, PartGroup.From(parts));
+            _notice = new Notice($"Saved {component.Name}. Click or drag it from Components to place it.");
+        }
+        _nameDialog = null;
+    }
+
+    private void DeleteComponent(string id)
+    {
+        _library.Delete(id);
+        _confirmDeleteId = null;
+    }
+
+    private async Task ImportComponentsAsync(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            string json;
+            await using (var stream = e.File.OpenReadStream(MaxImportBytes))
+            using (var reader = new StreamReader(stream))
+            {
+                json = await reader.ReadToEndAsync();
+            }
+            var count = _library.Import(ComponentFile.Read(json));
+            _notice = new Notice($"Imported {count} component{(count == 1 ? "" : "s")} from {e.File.Name}.");
+        }
+        catch (BuildFileException ex)
+        {
+            _notice = new Notice($"Couldn't import {e.File.Name}: {ex.Message}", IsError: true);
+        }
+        catch (IOException)
+        {
+            _notice = new Notice($"Couldn't import {e.File.Name}: files over {MaxImportBytes / 1024 / 1024} MB aren't supported.", IsError: true);
+        }
+    }
+
+    private async Task ExportComponentsAsync()
+    {
+        const string name = "brickforge-components.json";
+        await Storage.DownloadAsync(name, ComponentFile.Write(_library.Components));
+        var count = _library.Components.Count;
+        _notice = new Notice($"Exported {count} component{(count == 1 ? "" : "s")} to {name}.");
     }
 
     // ---- files --------------------------------------------------------------------------------
@@ -342,6 +539,7 @@
     public void Dispose()
     {
         _editor.Changed -= OnChanged;
+        _library.Changed -= OnLibraryChanged;
         _pendingSave?.Cancel();
     }
 }

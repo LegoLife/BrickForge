@@ -177,6 +177,21 @@ public class SelectionTests
     }
 
     [Fact]
+    public void Holding_a_component_stamps_it_like_a_paste()
+    {
+        var (bottom, top, _) = Scene();
+        var tower = PartGroup.From([bottom, top]);
+
+        _editor.Hold(tower, "Tower");
+        Assert.Equal("Tower", _editor.Held!.Label);
+        Assert.True(_editor.Held.IsPaste);
+
+        _editor.PlaceAt(new GridPos(20, 0, 20));
+        Assert.Equal(5, _editor.Build.Parts.Count);
+        Assert.NotNull(_editor.Held);
+    }
+
+    [Fact]
     public void Paste_with_an_empty_clipboard_does_nothing()
     {
         _editor.Paste();

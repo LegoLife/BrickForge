@@ -15,10 +15,11 @@ public sealed record BuildChange(IReadOnlyList<PlacedPart> Added, IReadOnlyList<
 public enum EditorMode { Build, Paint, Select }
 
 /// <summary>
-/// A group following the cursor instead of the plain part tool: a paste (<see cref="Moving"/> empty,
-/// stamped until cancelled) or parts picked up to be moved (hidden from the view until dropped).
+/// A group following the cursor instead of the plain part tool: a paste or component (<see cref="Moving"/>
+/// empty, stamped until cancelled) or parts picked up to be moved (hidden from the view until dropped).
 /// </summary>
-public sealed record HeldGroup(PartGroup Group, IReadOnlyList<PlacedPart> Moving)
+/// <param name="Label">What is being placed, e.g. a component's name; null for the clipboard or a move.</param>
+public sealed record HeldGroup(PartGroup Group, IReadOnlyList<PlacedPart> Moving, string? Label = null)
 {
     public bool IsPaste => Moving.Count == 0;
 }
@@ -38,6 +39,7 @@ public sealed class Editor(Build build)
     private PartGroup? _heldBase;                // the held group before rotation
     private IReadOnlyList<PlacedPart> _moving = [];
     private int _heldColorId;
+    private string? _heldLabel;
     private Rotation _toolRotation;              // the part tool's rotation, restored when a hold ends
 
     public event Action<BuildChange>? Changed;
@@ -54,7 +56,7 @@ public sealed class Editor(Build build)
     public IReadOnlySet<int> Selection => _selection;
     public bool HasClipboard => _clipboard is not null;
 
-    public HeldGroup? Held => _heldBase is null ? null : new HeldGroup(CurrentHeldGroup(), _moving);
+    public HeldGroup? Held => _heldBase is null ? null : new HeldGroup(CurrentHeldGroup(), _moving, _heldLabel);
 
     /// <summary>What a click in Build mode would place: the held group, or the selected part.</summary>
     public PartGroup Ghost => _heldBase is null ? PartGroup.Single(Part, Rotation, Color.Id) : CurrentHeldGroup();
@@ -217,9 +219,17 @@ public sealed class Editor(Build build)
     /// <summary>Holds the clipboard under the cursor; each <see cref="PlaceAt"/> stamps a copy until <see cref="Cancel"/>.</summary>
     public void Paste()
     {
-        if (_clipboard is null) return;
+        if (_clipboard is not null) Hold(_clipboard);
+    }
+
+    /// <summary>
+    /// Holds any group under the cursor — e.g. a saved component — to be stamped like a paste.
+    /// </summary>
+    /// <param name="label">Shown while placing, e.g. the component's name.</param>
+    public void Hold(PartGroup group, string? label = null)
+    {
         CancelHoldFirst();
-        BeginHold(_clipboard, []);
+        BeginHold(group, [], label);
         Raise(BuildChange.None);
     }
 
@@ -234,7 +244,7 @@ public sealed class Editor(Build build)
         if (IsMoving(partId) || !TryGetPart(partId, out var part)) return;
         CancelHoldFirst();
         var parts = _selection.Contains(partId) ? SelectedParts() : [part];
-        BeginHold(PartGroup.From(parts), parts);
+        BeginHold(PartGroup.From(parts), parts, label: null);
         Raise(new BuildChange([], [.. parts.Select(p => p.Id)]));
     }
 
@@ -346,8 +356,9 @@ public sealed class Editor(Build build)
         return new BuildChange(to, [.. from.Select(p => p.Id)], plateChanged ? plate : null);
     }
 
-    private void BeginHold(PartGroup group, IReadOnlyList<PlacedPart> moving)
+    private void BeginHold(PartGroup group, IReadOnlyList<PlacedPart> moving, string? label)
     {
+        _heldLabel = label;
         _toolRotation = Rotation;
         Rotation = Rotation.R0;
         _heldBase = group;
@@ -363,6 +374,7 @@ public sealed class Editor(Build build)
         var reshow = new BuildChange(_moving, []);
         _heldBase = null;
         _moving = [];
+        _heldLabel = null;
         Rotation = _toolRotation;
         return reshow;
     }

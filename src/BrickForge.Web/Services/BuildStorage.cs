@@ -7,6 +7,8 @@ public sealed class BuildStorage(IJSRuntime js) : IAsyncDisposable
 {
     private const string AutosaveKey = "brickforge.autosave";
     private const string BrokenAutosaveKey = "brickforge.autosave.unreadable";
+    private const string ComponentsKey = "brickforge.components";
+    private const string BrokenComponentsKey = "brickforge.components.unreadable";
 
     private IJSObjectReference? _module;
 
@@ -20,6 +22,17 @@ public sealed class BuildStorage(IJSRuntime js) : IAsyncDisposable
     /// <summary>Keeps an autosave we couldn't read, so the next autosave doesn't destroy it.</summary>
     public async Task SetAsideUnreadableAutosaveAsync(string json) =>
         await (await ModuleAsync()).InvokeAsync<bool>("save", BrokenAutosaveKey, json);
+
+    public async Task<string?> LoadComponentsAsync() =>
+        await (await ModuleAsync()).InvokeAsync<string?>("load", ComponentsKey);
+
+    /// <returns>False if the browser refused (storage full or disabled).</returns>
+    public async Task<bool> SaveComponentsAsync(string json) =>
+        await (await ModuleAsync()).InvokeAsync<bool>("save", ComponentsKey, json);
+
+    /// <summary>Keeps a component library we couldn't read, so the next save doesn't destroy it.</summary>
+    public async Task SetAsideUnreadableComponentsAsync(string json) =>
+        await (await ModuleAsync()).InvokeAsync<bool>("save", BrokenComponentsKey, json);
 
     public async Task DownloadAsync(string filename, string json) =>
         await (await ModuleAsync()).InvokeVoidAsync("downloadText", filename, json, "application/json");

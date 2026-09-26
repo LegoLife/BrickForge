@@ -1,0 +1,49 @@
+@using BrickForge.Core
+
+@* Modal asking for a component name. *@
+<div class="modal-backdrop" @onclick="OnCancel">
+    <form class="modal" @onclick:stopPropagation @onsubmit="ConfirmAsync" @onsubmit:preventDefault @onkeydown="OnKeyDown">
+        <h2>@Title</h2>
+        @if (Description is not null)
+        {
+            <p class="modal-description">@Description</p>
+        }
+
+        <input class="name-input" @ref="_input" @bind="_name" @bind:event="oninput"
+               maxlength="@ComponentLibrary.MaxNameLength" placeholder="Name" />
+
+        <div class="modal-actions">
+            <button type="button" @onclick="OnCancel">Cancel</button>
+            <button type="submit" class="primary" disabled="@string.IsNullOrWhiteSpace(_name)">@ConfirmLabel</button>
+        </div>
+    </form>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Description { get; set; }
+    [Parameter, EditorRequired] public string ConfirmLabel { get; set; } = "";
+    [Parameter] public string Initial { get; set; } = "";
+    [Parameter] public EventCallback<string> OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private ElementReference _input;
+    private string _name = "";
+
+    protected override void OnInitialized() => _name = Initial;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await _input.FocusAsync(preventScroll: true);
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") await OnCancel.InvokeAsync();
+    }
+
+    private async Task ConfirmAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_name)) await OnConfirm.InvokeAsync(_name);
+    }
+}

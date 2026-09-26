@@ -37,18 +37,19 @@ public sealed class PartGroup
         new([new GroupPart(part, new GridPos(0, 0, 0), rotation, colorId)]);
 
     /// <exception cref="ArgumentException">No parts given.</exception>
-    public static PartGroup From(IEnumerable<PlacedPart> parts)
+    public static PartGroup From(IEnumerable<PlacedPart> parts) =>
+        Create(parts.Select(p => new GroupPart(p.Part, p.Position, p.Rotation, p.ColorId)));
+
+    /// <summary>A group from parts at arbitrary offsets, shifted so the minimum corner is the origin.</summary>
+    /// <exception cref="ArgumentException">No parts given.</exception>
+    public static PartGroup Create(IEnumerable<GroupPart> parts)
     {
         var list = parts.ToList();
         if (list.Count == 0) throw new ArgumentException("A group needs at least one part.", nameof(parts));
 
-        var min = new GridPos(list.Min(p => p.Position.X), list.Min(p => p.Position.Y), list.Min(p => p.Position.Z));
+        var min = new GridPos(list.Min(p => p.Offset.X), list.Min(p => p.Offset.Y), list.Min(p => p.Offset.Z));
         return new PartGroup(list
-            .Select(p => new GroupPart(
-                p.Part,
-                new GridPos(p.Position.X - min.X, p.Position.Y - min.Y, p.Position.Z - min.Z),
-                p.Rotation,
-                p.ColorId))
+            .Select(p => p with { Offset = new GridPos(p.Offset.X - min.X, p.Offset.Y - min.Y, p.Offset.Z - min.Z) })
             .ToList());
     }
 

@@ -451,6 +451,54 @@ export function createViewport(host, o, dotnet) {
         updateHover();
     }
 
+    // Drag and drop from the panel. Tiles marked data-brickforge-drag start a native drag; C# has
+    // already made the dragged part or component the ghost (via the tile's @ondragstart), so over the
+    // canvas this behaves like hovering, and dropping behaves like a click.
+    let panelDrag = false;
+
+    /** @param {DragEvent} e */
+    function onDocumentDragStart(e) {
+        const tile = e.target instanceof Element ? e.target.closest('[data-brickforge-drag]') : null;
+        if (!tile || !e.dataTransfer) return;
+        panelDrag = true;
+        e.dataTransfer.setData('text/plain', 'brickforge'); // Firefox won't start a drag without data
+        e.dataTransfer.effectAllowed = 'copy';
+    }
+
+    /** @param {DragEvent} e */
+    function onDragOver(e) {
+        if (!panelDrag) return; // not ours: leave the default (no drop)
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        const rect = canvas.getBoundingClientRect();
+        pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+        pointerInside = true;
+        updateHover();
+    }
+
+    function onDragLeave() {
+        pointerInside = false;
+        updateHover();
+    }
+
+    /** @param {DragEvent} e */
+    async function onDrop(e) {
+        if (!panelDrag) return;
+        e.preventDefault();
+        if (candidate) await call('Drop', candidate);
+    }
+
+    async function onDocumentDragEnd() {
+        if (!panelDrag) return;
+        panelDrag = false;
+        await call('DragEnded');
+    }
+
+    canvas.addEventListener('dragover', onDragOver);
+    canvas.addEventListener('dragleave', onDragLeave);
+    canvas.addEventListener('drop', onDrop);
+    document.addEventListener('dragstart', onDocumentDragStart);
+    document.addEventListener('dragend', onDocumentDragEnd);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerleave', onPointerLeave);
     canvas.addEventListener('pointerdown', onPointerDown);
@@ -477,7 +525,61 @@ export function createViewport(host, o, dotnet) {
         renderer.render(scene, camera);
     });
 
+    // Component thumbnails come from a small second renderer, so they never disturb the main view.
+    /** @type {{ renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera } | null} */
+    let thumbnails = null;
+
+    /**
+     * Renders a group (flat, as for the ghost) to a PNG data URL, framed to fit.
+     * @param {number[]} flat @param {[number, number, number]} size @param {number} width @param {number} height
+     */
+    function renderThumbnail(flat, size, width, height) {
+        if (!thumbnails) {
+            const r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+            r.toneMapping = THREE.NeutralToneMapping;
+            const s = new THREE.Scene();
+            s.add(new THREE.HemisphereLight(0xffffff, 0x445066, 1.4));
+            const light = new THREE.DirectionalLight(0xffffff, 2.2);
+            light.position.set(3, 5, 2);
+            s.add(light);
+            thumbnails = { renderer: r, scene: s, camera: new THREE.PerspectiveCamera(30, 1, 0.1, 1000) };
+        }
+        const { renderer: r, scene: s, camera: cam } = thumbnails;
+        r.setSize(width, height, false);
+        cam.aspect = width / height;
+
+        const group = new THREE.Group();
+        for (let i = 0; i < flat.length; i += 6) {
+            const def = o.parts[flat[i]];
+            const mesh = new THREE.Mesh(geometries.model(def.id), materials.get(flat[i + 5]));
+            const [sx, sz] = footprint(def, flat[i + 4]);
+            mesh.position.set(flat[i + 1] + sx / 2, flat[i + 2] * PH, flat[i + 3] + sz / 2);
+            mesh.rotation.y = -flat[i + 4] * Math.PI / 2;
+            group.add(mesh);
+        }
+        const [gx, gy, gz] = size;
+        const centre = new THREE.Vector3(gx / 2, (gy * PH + o.studHeight) / 2, gz / 2);
+        const radius = new THREE.Vector3(gx, gy * PH + o.studHeight, gz).length() / 2;
+        const fov = THREE.MathUtils.degToRad(cam.fov) / 2;
+        const distance = radius / Math.sin(Math.min(fov, Math.atan(Math.tan(fov) * cam.aspect))) * 1.05;
+        cam.position.copy(centre).add(new THREE.Vector3(1, 0.85, 1.25).normalize().multiplyScalar(distance));
+        cam.lookAt(centre);
+        cam.updateProjectionMatrix();
+
+        s.add(group);
+        r.render(s, cam);
+        s.remove(group);
+        return r.domElement.toDataURL('image/png');
+    }
+
     const api = {
+        /**
+         * @param {number[]} flat [catalogIndex, dx, dy, dz, rotation, colorId] per part
+         * @param {[number, number, number]} size @param {number} width @param {number} height
+         */
+        renderThumbnail(flat, size, width, height) {
+            return renderThumbnail(flat, size, width, height);
+        },
         /**
          * Applies one change from C#: removals first, then additions, then the current tool.
          * `added` is flat: [id, catalogIndex, x, y, z, rotation, colorId] per part.
@@ -534,6 +636,9 @@ export function createViewport(host, o, dotnet) {
             window.removeEventListener('keydown', onKeyDown);
             window.removeEventListener('keyup', onKeyUp);
             window.removeEventListener('blur', onBlur);
+            document.removeEventListener('dragstart', onDocumentDragStart);
+            document.removeEventListener('dragend', onDocumentDragEnd);
+            thumbnails?.renderer.dispose();
             controls.dispose();
             scene.traverse(obj => {
                 if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) obj.geometry.dispose();

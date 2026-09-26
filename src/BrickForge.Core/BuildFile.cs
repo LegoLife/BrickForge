@@ -60,24 +60,35 @@ public static class BuildFile
         foreach (var entry in doc.Parts)
         {
             var where = $"Part {nextId} ({entry.Part} at {entry.X},{entry.Y},{entry.Z})";
-            if (!PartCatalog.TryGet(entry.Part, out var part))
-                throw new BuildFileException($"{where}: unknown part '{entry.Part}'.");
-            if (Palette.All.All(c => c.Id != entry.Color))
-                throw new BuildFileException($"{where}: unknown colour {entry.Color}.");
-            if (entry.Rotation is < 0 or > 3)
-                throw new BuildFileException($"{where}: invalid rotation {entry.Rotation}.");
-
-            var placed = new PlacedPart(nextId++, part, new GridPos(entry.X, entry.Y, entry.Z), (Rotation)entry.Rotation, entry.Color);
-            try
-            {
-                build.Restore(placed);
-            }
-            catch (InvalidOperationException ex)
-            {
-                throw new BuildFileException($"{where}: {ex.Message}", ex);
-            }
+            RestoreEntry(build, nextId++, entry, where);
         }
         return new LoadedBuild(build.Baseplate, build.Parts.OrderBy(p => p.Id).ToList());
+    }
+
+    /// <summary>
+    /// Validates one part entry and puts it into <paramref name="build"/>, which catches parts
+    /// off the baseplate and overlaps.
+    /// </summary>
+    /// <exception cref="BuildFileException">The entry is invalid; the message starts with <paramref name="where"/>.</exception>
+    internal static PlacedPart RestoreEntry(Build build, int id, PartEntry entry, string where)
+    {
+        if (!PartCatalog.TryGet(entry.Part, out var part))
+            throw new BuildFileException($"{where}: unknown part '{entry.Part}'.");
+        if (Palette.All.All(c => c.Id != entry.Color))
+            throw new BuildFileException($"{where}: unknown colour {entry.Color}.");
+        if (entry.Rotation is < 0 or > 3)
+            throw new BuildFileException($"{where}: invalid rotation {entry.Rotation}.");
+
+        var placed = new PlacedPart(id, part, new GridPos(entry.X, entry.Y, entry.Z), (Rotation)entry.Rotation, entry.Color);
+        try
+        {
+            build.Restore(placed);
+            return placed;
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new BuildFileException($"{where}: {ex.Message}", ex);
+        }
     }
 }
 

@@ -12,6 +12,18 @@
     private IJSObjectReference? _viewport;
     private DotNetObjectReference<Viewport>? _self;
     private Editor? _subscribed;
+    private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Completes once the 3D view exists and can render thumbnails.</summary>
+    public Task Ready => _ready.Task;
+
+    /// <summary>A PNG data URL of <paramref name="group"/>, framed to fit, with a transparent background.</summary>
+    public async Task<string> RenderThumbnailAsync(PartGroup group, int width, int height)
+    {
+        await Ready;
+        return await _viewport!.InvokeAsync<string>(
+            "renderThumbnail", FlattenGroup(group), new[] { group.SizeX, group.SizeY, group.SizeZ }, width, height);
+    }
 
     protected override void OnParametersSet()
     {
@@ -40,7 +52,8 @@
             colors = Palette.All.Select(c => new { c.Id, c.Hex, c.IsTransparent }),
         }, _self);
 
-        await SendAsync(new BuildChange([.. build.Parts], []));
+        await SendAsync(new BuildChange([.. Editor.Build.Parts], []));
+        _ready.TrySetResult();
     }
 
     /// <summary>
@@ -106,6 +119,20 @@
 
     [JSInvokable]
     public void BoxSelect(int[] partIds, bool additive) => Editor.SelectMany(partIds, additive);
+
+    /// <summary>A part or component dragged from the panel was dropped on the view.</summary>
+    [JSInvokable]
+    public void Drop(CellDto cell) => Editor.PlaceAt(new GridPos(cell.X, cell.Y, cell.Z));
+
+    /// <summary>
+    /// A panel drag finished, dropped or not. A dragged component is held only for the drag, so let go of it;
+    /// a dragged part simply stays selected as the part tool.
+    /// </summary>
+    [JSInvokable]
+    public void DragEnded()
+    {
+        if (Editor.Held is { IsPaste: true }) Editor.Cancel();
+    }
 
     [JSInvokable]
     public void Remove(int partId) => Editor.Remove(partId);
