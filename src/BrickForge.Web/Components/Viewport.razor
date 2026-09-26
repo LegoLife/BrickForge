@@ -58,6 +58,7 @@
             {
                 added = Flatten(change.Added),
                 removed = change.Removed,
+                baseplate = change.Baseplate is { } plate ? new { width = plate.WidthStuds, depth = plate.DepthStuds } : null,
                 tool = new
                 {
                     partId = Editor.Part.Id,

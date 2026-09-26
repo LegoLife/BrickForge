@@ -29,16 +29,35 @@ public class BuildFileTests
     {
         var original = SampleBuild();
 
-        var loaded = BuildFile.Read(BuildFile.Write(original), Plate);
+        var loaded = BuildFile.Read(BuildFile.Write(original)).Parts;
 
         static string Describe(PlacedPart p) => $"{p.Part.Id} {p.Position} {p.Rotation} {p.ColorId}";
         Assert.Equal(original.Parts.Select(Describe).Order(), loaded.Select(Describe).Order());
     }
 
     [Fact]
+    public void The_baseplate_size_comes_from_the_file()
+    {
+        var build = new Build(new Baseplate(96, 40));
+
+        Assert.Equal(new Baseplate(96, 40), BuildFile.Read(BuildFile.Write(build)).Baseplate);
+    }
+
+    [Theory]
+    [InlineData(4, 16)]
+    [InlineData(16, 200)]
+    public void Baseplate_sizes_out_of_range_are_rejected(int width, int depth)
+    {
+        var json = $$"""{"format":"brickforge","version":1,"baseplate":{"width":{{width}},"depth":{{depth}}},"parts":[]}""";
+
+        var ex = Assert.Throws<BuildFileException>(() => BuildFile.Read(json));
+        Assert.Contains("baseplate", ex.Message);
+    }
+
+    [Fact]
     public void Loaded_parts_get_fresh_sequential_ids()
     {
-        var loaded = BuildFile.Read(BuildFile.Write(SampleBuild()), Plate);
+        var loaded = BuildFile.Read(BuildFile.Write(SampleBuild())).Parts;
 
         Assert.Equal([1, 2, 3], loaded.Select(p => p.Id));
     }
@@ -46,7 +65,7 @@ public class BuildFileTests
     [Fact]
     public void Floating_parts_are_allowed_because_removal_can_leave_them()
     {
-        var loaded = BuildFile.Read(Json("""["brick-1x1",0,9,0,0,0]"""), Plate);
+        var loaded = BuildFile.Read(Json("""["brick-1x1",0,9,0,0,0]""")).Parts;
 
         Assert.Single(loaded);
     }
@@ -59,7 +78,7 @@ public class BuildFileTests
     [InlineData("""["brick-1x1",0,0,0,0,0],["brick-1x1",0,2,0,0,0]""", "overlaps")]
     public void Invalid_parts_are_rejected_with_a_reason(string parts, string expectedMessage)
     {
-        var ex = Assert.Throws<BuildFileException>(() => BuildFile.Read(Json(parts), Plate));
+        var ex = Assert.Throws<BuildFileException>(() => BuildFile.Read(Json(parts)));
 
         Assert.Contains(expectedMessage, ex.Message);
     }
@@ -74,6 +93,6 @@ public class BuildFileTests
     [InlineData("""{"format":"brickforge","version":1,"baseplate":{"width":16,"depth":16},"parts":[["brick-1x1",0.5,0,0,0,0]]}""")]
     public void Unreadable_files_are_rejected(string json)
     {
-        Assert.Throws<BuildFileException>(() => BuildFile.Read(json, Plate));
+        Assert.Throws<BuildFileException>(() => BuildFile.Read(json));
     }
 }

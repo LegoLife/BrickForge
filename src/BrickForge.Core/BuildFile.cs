@@ -5,6 +5,9 @@ namespace BrickForge.Core;
 
 public sealed class BuildFileException(string message, Exception? inner = null) : Exception(message, inner);
 
+/// <summary>A build read from a file: its baseplate and its parts, with fresh ids.</summary>
+public sealed record LoadedBuild(Baseplate Baseplate, IReadOnlyList<PlacedPart> Parts);
+
 /// <summary>
 /// The saved-build format, used for both autosave and file export:
 /// <c>{"format":"brickforge","version":1,"baseplate":{"width":48,"depth":48},"parts":[["brick-2x4",x,y,z,rotation,color], ...]}</c>.
@@ -27,11 +30,11 @@ public static class BuildFile
         BuildFileJson.Default.BuildDocument);
 
     /// <summary>
-    /// Parses and validates a saved build against <paramref name="baseplate"/>, returning its parts with fresh ids.
-    /// Parts must be known, in bounds and non-overlapping; they need not be connected.
+    /// Parses and validates a saved build. Parts must be known, on the file's baseplate and
+    /// non-overlapping; they need not be connected. Parts get fresh ids.
     /// </summary>
     /// <exception cref="BuildFileException">The file is unreadable or describes an impossible build.</exception>
-    public static IReadOnlyList<PlacedPart> Read(string json, Baseplate baseplate)
+    public static LoadedBuild Read(string json)
     {
         BuildDocument? doc;
         try
@@ -48,7 +51,11 @@ public static class BuildFile
         if (doc.Version != Version)
             throw new BuildFileException($"Unsupported build file version {doc.Version}.");
 
-        var build = new Build(baseplate);
+        if (doc.Baseplate is not { } size || !Baseplate.IsValidSize(size.Width) || !Baseplate.IsValidSize(size.Depth))
+            throw new BuildFileException(
+                $"The baseplate must be between {Baseplate.MinSize} and {Baseplate.MaxSize} studs on each side.");
+
+        var build = new Build(new Baseplate(size.Width, size.Depth));
         var nextId = 1;
         foreach (var entry in doc.Parts)
         {
@@ -70,11 +77,11 @@ public static class BuildFile
                 throw new BuildFileException($"{where}: {ex.Message}", ex);
             }
         }
-        return build.Parts.OrderBy(p => p.Id).ToList();
+        return new LoadedBuild(build.Baseplate, build.Parts.OrderBy(p => p.Id).ToList());
     }
 }
 
-internal sealed record BuildDocument(string Format, int Version, BaseplateEntry Baseplate, IReadOnlyList<PartEntry>? Parts);
+internal sealed record BuildDocument(string Format, int Version, BaseplateEntry? Baseplate, IReadOnlyList<PartEntry>? Parts);
 
 internal sealed record BaseplateEntry(int Width, int Depth);
 

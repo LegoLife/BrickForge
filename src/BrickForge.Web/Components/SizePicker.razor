@@ -1,0 +1,76 @@
+@using BrickForge.Core
+
+@* Modal for choosing a baseplate size: square presets plus custom width × depth. *@
+<div class="modal-backdrop" @onclick="OnCancel">
+    <form class="modal" @onclick:stopPropagation @onsubmit="ConfirmAsync" @onsubmit:preventDefault @onkeydown="OnKeyDown">
+        <h2>@Title</h2>
+        @if (Description is not null)
+        {
+            <p class="modal-description">@Description</p>
+        }
+
+        <div class="size-presets">
+            @foreach (var size in Presets)
+            {
+                <button type="button" class="@(size == _width && size == _depth ? "selected" : null)"
+                        @onclick="() => (_width, _depth) = (size, size)">@size×@size</button>
+            }
+        </div>
+
+        <div class="size-inputs">
+            <label>
+                Width
+                <input type="number" min="@Baseplate.MinSize" max="@Baseplate.MaxSize" @bind="_width" @bind:event="oninput" />
+            </label>
+            <span>×</span>
+            <label>
+                Depth
+                <input type="number" min="@Baseplate.MinSize" max="@Baseplate.MaxSize" @bind="_depth" @bind:event="oninput" />
+            </label>
+            <span class="unit">studs</span>
+        </div>
+
+        @if ((ValidationError ?? Error) is { } error)
+        {
+            <p class="notice error">@error</p>
+        }
+
+        <div class="modal-actions">
+            <button type="button" @onclick="OnCancel">Cancel</button>
+            <button type="submit" class="primary" disabled="@(ValidationError is not null)">@ConfirmLabel</button>
+        </div>
+    </form>
+</div>
+
+@code {
+    private static readonly int[] Presets = [16, 32, 48, 64, 96, 128];
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Description { get; set; }
+    [Parameter, EditorRequired] public string ConfirmLabel { get; set; } = "";
+    [Parameter, EditorRequired] public Baseplate Initial { get; set; } = Baseplate.Default;
+    /// <summary>An error from the last attempt, e.g. parts that wouldn't fit.</summary>
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public EventCallback<Baseplate> OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private int _width;
+    private int _depth;
+
+    protected override void OnInitialized() => (_width, _depth) = (Initial.WidthStuds, Initial.DepthStuds);
+
+    private string? ValidationError =>
+        Baseplate.IsValidSize(_width) && Baseplate.IsValidSize(_depth)
+            ? null
+            : $"Each side must be {Baseplate.MinSize}–{Baseplate.MaxSize} studs.";
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") await OnCancel.InvokeAsync();
+    }
+
+    private async Task ConfirmAsync()
+    {
+        if (ValidationError is null) await OnConfirm.InvokeAsync(new Baseplate(_width, _depth));
+    }
+}

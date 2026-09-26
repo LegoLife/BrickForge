@@ -386,3 +386,130 @@ kbd {
     background: #1d2330;
     font: 600 11px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+/* --- Milestone 5: baseplate size --- */
+.baseplate-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: 12px;
+}
+
+    .baseplate-row span {
+        opacity: 0.8;
+    }
+
+    .baseplate-row button {
+        padding: 3px 10px;
+        font-size: 12px;
+    }
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    background: rgba(8, 10, 15, 0.6);
+}
+
+.modal {
+    width: min(360px, calc(100vw - 32px));
+    padding: 18px;
+    border: 1px solid #2a3142;
+    border-radius: 8px;
+    background: #151a24;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    font-size: 13px;
+}
+
+    .modal h2 {
+        margin: 0 0 6px;
+        font-size: 16px;
+    }
+
+    .modal button {
+        border: 1px solid #2a3142;
+        border-radius: 4px;
+        background: #1d2330;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+    }
+
+        .modal button:hover:not(:disabled) {
+            border-color: #4a5570;
+        }
+
+        .modal button.selected {
+            border-color: #5b9cff;
+            background: #23324d;
+        }
+
+        .modal button.primary {
+            border-color: #3d7be0;
+            background: #2f6fd6;
+            color: #fff;
+        }
+
+        .modal button:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+
+.modal-description {
+    margin: 0 0 14px;
+    opacity: 0.7;
+    line-height: 1.4;
+}
+
+.size-presets {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-bottom: 14px;
+}
+
+    .size-presets button {
+        padding: 7px 0;
+    }
+
+.size-inputs {
+    display: flex;
+    align-items: end;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+    .size-inputs label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 11px;
+        opacity: 0.85;
+    }
+
+    .size-inputs input {
+        width: 72px;
+        padding: 5px 6px;
+        border: 1px solid #2a3142;
+        border-radius: 4px;
+        background: #0f131b;
+        color: inherit;
+        font: inherit;
+    }
+
+    .size-inputs span {
+        padding-bottom: 6px;
+        opacity: 0.6;
+    }
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+    .modal-actions button {
+        padding: 6px 14px;
+    }

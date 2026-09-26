@@ -39,7 +39,9 @@ export function createViewport(host, o, dotnet) {
         console.error(`[BrickForge] ${method} failed`, err);
         return undefined;
     });
-    const W = o.baseplateWidth, D = o.baseplateDepth, PH = o.plateHeight;
+    // Baseplate size can change (resize, new build, import); see setBaseplate().
+    let W = o.baseplateWidth, D = o.baseplateDepth;
+    const PH = o.plateHeight;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -51,27 +53,64 @@ export function createViewport(host, o, dotnet) {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1d2330);
 
-    const span = Math.max(W, D);
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, span * 20);
-    const homePosition = new THREE.Vector3(span * 0.7, span * 0.75, span * 1.0);
-    camera.position.copy(homePosition);
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1);
+    const homePosition = new THREE.Vector3();
 
     const controls = new OrbitControls(camera, canvas);
     controls.enableDamping = true;
     controls.minDistance = 2;
-    controls.maxDistance = span * 4;
     controls.maxPolarAngle = Math.PI * 0.49; // don't go under the baseplate
     // Left mouse is reserved for placing bricks; orbit on right, pan on middle.
     controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE };
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x445066, 1.2));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.bias = -0.0005;
+    scene.add(sun);
+
+    /** Camera limits, home view and shadow coverage all scale with the baseplate. */
+    function fitToBaseplate() {
+        const span = Math.max(W, D);
+        camera.far = span * 20;
+        camera.updateProjectionMatrix();
+        homePosition.set(span * 0.7, span * 0.75, span * 1.0);
+        controls.maxDistance = span * 4;
+        sun.position.set(span * 0.4, span, span * 0.25);
+        const half = span * 0.6;
+        Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, near: 1, far: span * 3 });
+        sun.shadow.camera.updateProjectionMatrix();
+    }
+    fitToBaseplate();
+    camera.position.copy(homePosition);
     controls.update();
 
-    addLights(scene, span);
-    const baseplate = createBaseplate(o);
+    let baseplate = createBaseplate(o);
     scene.add(baseplate.slab);
 
     const geometries = new PartGeometries(o, partDefs);
     const materials = new ColorMaterials(o.colors);
-    const parts = new PartRenderer(scene, geometries, materials, o, baseplate.material);
+    let parts = new PartRenderer(scene, geometries, materials, o, baseplate.material);
+
+    /**
+     * Rebuilds everything that depends on the baseplate size. All parts are dropped;
+     * the change that resized the baseplate re-adds them at their new positions.
+     * @param {number} width @param {number} depth
+     */
+    function setBaseplate(width, depth) {
+        o.baseplateWidth = W = width;
+        o.baseplateDepth = D = depth;
+        parts.dispose();
+        scene.remove(baseplate.slab);
+        baseplate.slab.geometry.dispose();
+        baseplate.material.dispose();
+        baseplate = createBaseplate(o);
+        scene.add(baseplate.slab);
+        parts = new PartRenderer(scene, geometries, materials, o, baseplate.material);
+        fitToBaseplate();
+        resetView();
+    }
 
     // ---- tool, ghost & highlight -----------------------------------------------------------
     /** @typedef {{ partId: string, colorId: number, rotation: number, mode: 'build' | 'paint' }} Tool */
@@ -340,10 +379,12 @@ export function createViewport(host, o, dotnet) {
         /**
          * Applies one change from C#: removals first, then additions, then the current tool.
          * `added` is flat: [id, catalogIndex, x, y, z, rotation, colorId] per part.
-         * @param {{ added: number[], removed: number[], tool: Tool }} update
+         * `baseplate` is present only when the baseplate size changed.
+         * @param {{ added: number[], removed: number[], tool: Tool, baseplate?: { width: number, depth: number } }} update
          */
-        update({ added, removed, tool: next }) {
-            for (const id of removed) parts.remove(id);
+        update({ added, removed, tool: next, baseplate: plate }) {
+            if (plate) setBaseplate(plate.width, plate.depth); // drops every part, so no removals needed
+            else for (const id of removed) parts.remove(id);
             for (let i = 0; i < added.length; i += 7) {
                 parts.add({
                     id: added[i], partId: o.parts[added[i + 1]].id,
@@ -773,20 +814,6 @@ function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
 function isTyping(e) {
     const t = /** @type {HTMLElement | null} */ (e.target);
     return !!t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName));
-}
-
-/** @param {THREE.Scene} scene @param {number} span */
-function addLights(scene, span) {
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x445066, 1.2));
-
-    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
-    sun.position.set(span * 0.4, span, span * 0.25);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    const half = span * 0.6;
-    Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, near: 1, far: span * 3 });
-    sun.shadow.bias = -0.0005;
-    scene.add(sun);
 }
 
 /**

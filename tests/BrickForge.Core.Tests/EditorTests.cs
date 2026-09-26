@@ -211,7 +211,7 @@ public class EditorTests
         var old = PlaceAt(0, 0, 0);
         var incoming = new PlacedPart(1, Brick2x2, new GridPos(8, 0, 8), Rotation.R0, Blue.Id);
 
-        _editor.ReplaceAll([incoming]);
+        _editor.ReplaceAll(_editor.Build.Baseplate, [incoming]);
 
         Assert.Equal([incoming], _editor.Build.Parts);
         Assert.Equal([old.Id], _changes.Last().Removed);
@@ -219,6 +219,90 @@ public class EditorTests
 
         _editor.Undo();
         Assert.Equal([old], _editor.Build.Parts);
+    }
+
+    [Fact]
+    public void Replace_all_can_change_the_baseplate()
+    {
+        PlaceAt(0, 0, 0);
+        var incoming = new PlacedPart(1, Brick2x2, new GridPos(90, 0, 10), Rotation.R0, Blue.Id);
+
+        _editor.ReplaceAll(new Baseplate(96, 32), [incoming]);
+
+        Assert.Equal(new Baseplate(96, 32), _editor.Build.Baseplate);
+        Assert.Equal(new Baseplate(96, 32), _changes.Last().Baseplate);
+
+        _editor.Undo();
+        Assert.Equal(new Baseplate(16, 16), _editor.Build.Baseplate);
+        Assert.Equal(new Baseplate(16, 16), _changes.Last().Baseplate);
+    }
+
+    [Fact]
+    public void New_build_empties_and_resizes_as_one_undo_step()
+    {
+        var part = PlaceAt(0, 0, 0);
+
+        _editor.NewBuild(new Baseplate(64, 64));
+
+        Assert.Empty(_editor.Build.Parts);
+        Assert.Equal(new Baseplate(64, 64), _editor.Build.Baseplate);
+
+        _editor.Undo();
+        Assert.Equal([part], _editor.Build.Parts);
+        Assert.Equal(new Baseplate(16, 16), _editor.Build.Baseplate);
+    }
+
+    [Fact]
+    public void Growing_keeps_parts_centred()
+    {
+        PlaceAt(0, 0, 0);
+
+        Assert.True(_editor.Resize(new Baseplate(20, 24)));
+
+        Assert.Equal(new GridPos(2, 0, 4), _editor.Build.Parts.Single().Position);
+    }
+
+    [Fact]
+    public void Shrinking_keeps_parts_centred()
+    {
+        PlaceAt(6, 0, 6);
+
+        Assert.True(_editor.Resize(new Baseplate(8, 8)));
+
+        Assert.Equal(new GridPos(2, 0, 2), _editor.Build.Parts.Single().Position);
+    }
+
+    [Fact]
+    public void Shrinking_is_refused_if_a_part_would_fall_off()
+    {
+        var part = PlaceAt(0, 0, 0);
+
+        Assert.False(_editor.Resize(new Baseplate(8, 8)));
+
+        Assert.Equal(new Baseplate(16, 16), _editor.Build.Baseplate);
+        Assert.Equal([part], _editor.Build.Parts);
+        _editor.Undo();
+        Assert.Empty(_editor.Build.Parts); // the only undo step was the placement
+    }
+
+    [Fact]
+    public void Resize_is_undoable()
+    {
+        var part = PlaceAt(0, 0, 0);
+        _editor.Resize(new Baseplate(32, 32));
+
+        _editor.Undo();
+
+        Assert.Equal(new Baseplate(16, 16), _editor.Build.Baseplate);
+        Assert.Equal([part], _editor.Build.Parts);
+    }
+
+    [Fact]
+    public void Resizing_to_the_same_size_is_not_an_undo_step()
+    {
+        Assert.True(_editor.Resize(new Baseplate(16, 16)));
+
+        Assert.False(_editor.CanUndo);
     }
 
     [Fact]

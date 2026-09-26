@@ -19,12 +19,16 @@
         </header>
 
         <div class="file-row">
-            <button title="Start an empty build (undoable)" @onclick="NewBuild">New</button>
+            <button title="Start an empty build (undoable)" @onclick="() => OpenSizeDialog(SizeDialog.New)">New</button>
             <label class="file-button" title="Load a .json build file (undoable)">
                 Import
                 <InputFile accept=".json,application/json" OnChange="ImportAsync" />
             </label>
             <button title="Download this build as a .json file" @onclick="ExportAsync">Export</button>
+        </div>
+        <div class="baseplate-row">
+            <span>Baseplate <strong>@_editor.Build.Baseplate</strong></span>
+            <button title="Change the baseplate size (undoable)" @onclick="() => OpenSizeDialog(SizeDialog.Resize)">Resize</button>
         </div>
         @if (_notice is { } notice)
         {
@@ -99,6 +103,20 @@
     </div>
 </div>
 
+@switch (_sizeDialog)
+{
+    case SizeDialog.New:
+        <SizePicker Title="New build" ConfirmLabel="Create"
+                    Description="Starts an empty build. Ctrl+Z brings the current one back."
+                    Initial="_editor.Build.Baseplate" OnConfirm="CreateNewBuild" OnCancel="CloseSizeDialog" />
+        break;
+    case SizeDialog.Resize:
+        <SizePicker Title="Resize baseplate" ConfirmLabel="Resize"
+                    Description="Grows or shrinks evenly around the centre, so parts keep their place."
+                    Initial="_editor.Build.Baseplate" Error="@_sizeError" OnConfirm="ResizeBaseplate" OnCancel="CloseSizeDialog" />
+        break;
+}
+
 @code {
     private static readonly (string Keys, string Action)[] Controls =
     [
@@ -121,10 +139,14 @@
 
     private enum SaveState { Loading, Saved, Pending, Failed }
 
+    private enum SizeDialog { None, New, Resize }
+
     private sealed record Notice(string Text, bool IsError = false);
 
     private readonly Editor _editor = new(new Build(Baseplate.Default));
     private Notice? _notice;
+    private SizeDialog _sizeDialog;
+    private string? _sizeError;
     private SaveState _saveState = SaveState.Loading;
     private CancellationTokenSource? _pendingSave;
 
@@ -159,7 +181,8 @@
         {
             try
             {
-                _editor.ReplaceAll(BuildFile.Read(json, _editor.Build.Baseplate));
+                var loaded = BuildFile.Read(json);
+                _editor.ReplaceAll(loaded.Baseplate, loaded.Parts);
                 _editor.ForgetHistory();
             }
             catch (BuildFileException ex)
@@ -198,11 +221,31 @@
 
     // ---- files --------------------------------------------------------------------------------
 
-    private void NewBuild()
+    // ---- baseplate size -----------------------------------------------------------------------
+
+    private void OpenSizeDialog(SizeDialog dialog) => (_sizeDialog, _sizeError) = (dialog, null);
+
+    private void CloseSizeDialog() => _sizeDialog = SizeDialog.None;
+
+    private void CreateNewBuild(Baseplate baseplate)
     {
-        if (_editor.Build.Parts.Count == 0) return;
-        _editor.Clear();
-        _notice = new Notice("Started a new build. Ctrl+Z brings the old one back.");
+        var hadParts = _editor.Build.Parts.Count > 0;
+        _editor.NewBuild(baseplate);
+        _notice = new Notice(hadParts
+            ? $"Started a new {baseplate} build. Ctrl+Z brings the old one back."
+            : $"Started a new {baseplate} build.");
+        CloseSizeDialog();
+    }
+
+    private void ResizeBaseplate(Baseplate baseplate)
+    {
+        if (!_editor.Resize(baseplate))
+        {
+            _sizeError = $"Some parts wouldn't fit on {baseplate}. Move them towards the middle, or pick a bigger size.";
+            return;
+        }
+        _notice = new Notice($"Baseplate is now {baseplate}. Ctrl+Z to undo.");
+        CloseSizeDialog();
     }
 
     private async Task ImportAsync(InputFileChangeEventArgs e)
@@ -215,9 +258,9 @@
             {
                 json = await reader.ReadToEndAsync();
             }
-            var parts = BuildFile.Read(json, _editor.Build.Baseplate);
-            _editor.ReplaceAll(parts);
-            _notice = new Notice($"Imported {e.File.Name} ({parts.Count} parts). Ctrl+Z to undo.");
+            var loaded = BuildFile.Read(json);
+            _editor.ReplaceAll(loaded.Baseplate, loaded.Parts);
+            _notice = new Notice($"Imported {e.File.Name} ({loaded.Parts.Count} parts on {loaded.Baseplate}). Ctrl+Z to undo.");
         }
         catch (BuildFileException ex)
         {

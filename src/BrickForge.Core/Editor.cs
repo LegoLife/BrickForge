@@ -2,13 +2,14 @@ namespace BrickForge.Core;
 
 /// <summary>
 /// What the view must redraw: remove <see cref="Removed"/> first, then draw <see cref="Added"/>.
-/// A modified part appears in both, under the same id.
+/// A modified part appears in both, under the same id. <see cref="Baseplate"/> is set when the
+/// baseplate changed, in which case every part is removed and re-added.
 /// </summary>
-public sealed record BuildChange(IReadOnlyList<PlacedPart> Added, IReadOnlyList<int> Removed)
+public sealed record BuildChange(IReadOnlyList<PlacedPart> Added, IReadOnlyList<int> Removed, Baseplate? Baseplate = null)
 {
     public static BuildChange None { get; } = new([], []);
 
-    public bool IsEmpty => Added.Count == 0 && Removed.Count == 0;
+    public bool IsEmpty => Added.Count == 0 && Removed.Count == 0 && Baseplate is null;
 }
 
 public enum EditorMode { Build, Paint }
@@ -138,19 +139,45 @@ public sealed class Editor(Build build)
     /// <summary>Puts a carried part back where it was.</summary>
     public void Cancel() => Raise(DropCarry());
 
-    /// <summary>Swaps the whole build for <paramref name="parts"/> (e.g. an imported file) as one undo step.</summary>
-    public void ReplaceAll(IReadOnlyList<PlacedPart> parts)
+    /// <summary>
+    /// Swaps the whole build — baseplate and parts — for another (e.g. an imported file), as one undo step.
+    /// The parts must fit <paramref name="baseplate"/> without overlapping.
+    /// </summary>
+    public void ReplaceAll(Baseplate baseplate, IReadOnlyList<PlacedPart> parts)
     {
         CancelCarryFirst();
         var before = Build.Parts.ToList();
-        if (before.Count == 0 && parts.Count == 0) return;
-        var step = new Step(before, parts);
+        if (before.Count == 0 && parts.Count == 0 && baseplate == Build.Baseplate) return;
+        var step = new Step(before, parts, Build.Baseplate, baseplate);
         Commit(step);
-        Raise(Apply(from: step.Before, to: step.After));
+        Raise(Apply(from: step.Before, to: step.After, step.PlateAfter));
     }
 
-    /// <summary>Removes every part, as one undo step.</summary>
-    public void Clear() => ReplaceAll([]);
+    /// <summary>Starts an empty build on a baseplate of the given size, as one undo step.</summary>
+    public void NewBuild(Baseplate baseplate) => ReplaceAll(baseplate, []);
+
+    /// <summary>Removes every part, keeping the baseplate, as one undo step.</summary>
+    public void Clear() => NewBuild(Build.Baseplate);
+
+    /// <summary>
+    /// Changes the baseplate size, growing or shrinking evenly around the centre so parts keep their
+    /// place relative to it. Refused (returns false) if any part would fall off the edge.
+    /// </summary>
+    public bool Resize(Baseplate baseplate)
+    {
+        if (baseplate == Build.Baseplate) return true;
+
+        // Integer division: an odd difference leaves the extra stud on the far side.
+        var dx = (baseplate.WidthStuds - Build.Baseplate.WidthStuds) / 2;
+        var dz = (baseplate.DepthStuds - Build.Baseplate.DepthStuds) / 2;
+        var shifted = Build.Parts
+            .Select(p => p with { Position = p.Position with { X = p.Position.X + dx, Z = p.Position.Z + dz } })
+            .ToList();
+        if (shifted.Any(p => !Fits(p, baseplate))) return false;
+
+        ReplaceAll(baseplate, shifted);
+        return true;
+    }
 
     /// <summary>Drops undo/redo, e.g. after restoring an autosave so the first undo can't empty the build.</summary>
     public void ForgetHistory()
@@ -165,7 +192,7 @@ public sealed class Editor(Build build)
         CancelCarryFirst();
         if (!_undo.TryPop(out var step)) return;
         _redo.Push(step);
-        Raise(Apply(from: step.After, to: step.Before));
+        Raise(Apply(from: step.After, to: step.Before, step.PlateBefore));
     }
 
     public void Redo()
@@ -173,13 +200,20 @@ public sealed class Editor(Build build)
         CancelCarryFirst();
         if (!_redo.TryPop(out var step)) return;
         _undo.Push(step);
-        Raise(Apply(from: step.Before, to: step.After));
+        Raise(Apply(from: step.Before, to: step.After, step.PlateAfter));
     }
 
     // ---- internals ----------------------------------------------------------------------------
 
-    /// <summary>One undoable action: a set of parts replaced by another (either may be empty).</summary>
-    private sealed record Step(IReadOnlyList<PlacedPart> Before, IReadOnlyList<PlacedPart> After)
+    /// <summary>
+    /// One undoable action: a set of parts replaced by another (either may be empty). When the baseplate
+    /// changes too, <see cref="Before"/> holds every part, so the build is empty while it is swapped.
+    /// </summary>
+    private sealed record Step(
+        IReadOnlyList<PlacedPart> Before,
+        IReadOnlyList<PlacedPart> After,
+        Baseplate? PlateBefore = null,
+        Baseplate? PlateAfter = null)
     {
         public static Step Of(PlacedPart? before, PlacedPart? after) =>
             new(before is null ? [] : [before], after is null ? [] : [after]);
@@ -191,11 +225,20 @@ public sealed class Editor(Build build)
         _redo.Clear();
     }
 
-    private BuildChange Apply(IReadOnlyList<PlacedPart> from, IReadOnlyList<PlacedPart> to)
+    private BuildChange Apply(IReadOnlyList<PlacedPart> from, IReadOnlyList<PlacedPart> to, Baseplate? plate = null)
     {
         foreach (var part in from) Build.Remove(part.Id);
+        var plateChanged = plate is not null && plate != Build.Baseplate;
+        if (plateChanged) Build.SetBaseplate(plate!);
         foreach (var part in to) Build.Restore(part);
-        return new BuildChange(to, [.. from.Select(p => p.Id)]);
+        return new BuildChange(to, [.. from.Select(p => p.Id)], plateChanged ? plate : null);
+    }
+
+    private static bool Fits(PlacedPart part, Baseplate baseplate)
+    {
+        var (sizeX, sizeZ) = part.Part.Footprint(part.Rotation);
+        var p = part.Position;
+        return p.X >= 0 && p.Z >= 0 && p.X + sizeX <= baseplate.WidthStuds && p.Z + sizeZ <= baseplate.DepthStuds;
     }
 
     /// <summary>Ends a carry, returning the change that re-shows the part in its original place.</summary>

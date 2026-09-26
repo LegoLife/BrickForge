@@ -26,7 +26,15 @@ public sealed class Build(Baseplate baseplate)
     private readonly Dictionary<GridPos, PlacedPart> _occupied = new();
     private int _nextId = 1;
 
-    public Baseplate Baseplate { get; } = baseplate;
+    public Baseplate Baseplate { get; private set; } = baseplate;
+
+    /// <summary>Swaps the baseplate. Only allowed while empty; callers re-add parts afterwards.</summary>
+    internal void SetBaseplate(Baseplate baseplate)
+    {
+        if (_parts.Count > 0)
+            throw new InvalidOperationException("The baseplate can only be changed while the build is empty.");
+        Baseplate = baseplate;
+    }
 
     public IReadOnlyCollection<PlacedPart> Parts => _parts.Values;
 
