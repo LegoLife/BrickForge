@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BrickForge.Core/BrickForge.Core.csproj" />
+    <Project Path="src/BrickForge.Web/BrickForge.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BrickForge.Core.Tests/BrickForge.Core.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,45 @@
+@using BrickForge.Core
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="viewport" @ref="_host"></div>
+
+@code {
+    [Parameter, EditorRequired] public Baseplate Baseplate { get; set; } = default!;
+
+    private ElementReference _host;
+    private IJSObjectReference? _module;
+    private IJSObjectReference? _viewport;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/viewport.js");
+        _viewport = await _module.InvokeAsync<IJSObjectReference>("createViewport", _host, new
+        {
+            baseplateWidth = Baseplate.WidthStuds,
+            baseplateDepth = Baseplate.DepthStuds,
+            plateHeight = LegoUnits.PlateHeight,
+            studDiameter = LegoUnits.StudDiameter,
+            studHeight = LegoUnits.StudHeight,
+        });
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_viewport is not null)
+            {
+                await _viewport.InvokeVoidAsync("dispose");
+                await _viewport.DisposeAsync();
+            }
+            if (_module is not null) await _module.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // Page is going away; nothing to clean up.
+        }
+    }
+}
