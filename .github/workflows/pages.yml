@@ -1,0 +1,61 @@
+# Publishes the Blazor WebAssembly app to GitHub Pages on every push to master.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push supersedes a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test
+        run: dotnet test
+
+      - name: Publish
+        run: dotnet publish src/BrickForge.Web -c Release -o publish
+
+      - name: Prepare for Pages
+        working-directory: publish/wwwroot
+        run: |
+          # The site is served from /<repo>/, not the domain root.
+          base="/${{ github.event.repository.name }}/"
+          sed -i "s|<base href=\"/\" />|<base href=\"$base\" />|" index.html
+          grep -q "<base href=\"$base\" />" index.html || { echo "base href was not rewritten"; exit 1; }
+          # Serve the app for unknown paths too, so a refresh on a deep link still loads it.
+          cp index.html 404.html
+          # Without this, Jekyll drops _framework (folders starting with _ are skipped).
+          touch .nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: publish/wwwroot
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

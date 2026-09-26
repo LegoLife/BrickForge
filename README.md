@@ -5,6 +5,9 @@ baseplate, copy and paste whole structures, and save your favourite builds as re
 
 Built with **Blazor WebAssembly (.NET 10)** and **Three.js**.
 
+**▶ Try it in your browser: https://legolife.github.io/BrickForge/** (no install needed; the first load
+takes a few seconds while the .NET runtime downloads)
+
 ![A small village built in BrickForge](docs/screenshots/overview.jpg)
 
 ## Features
@@ -44,6 +47,9 @@ dotnet run --project src/BrickForge.Web
 
 Then open http://localhost:5192. There's no build step for the JavaScript: Three.js is vendored under
 `src/BrickForge.Web/wwwroot/lib/three`.
+
+Every push to `master` runs the tests and redeploys the live site through
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml).
 
 To try the demo scene from the screenshots, use **Import** in the panel and pick
 [`samples/demo-village.json`](samples/demo-village.json). Import
