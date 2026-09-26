@@ -5,9 +5,44 @@
 <PageTitle>BrickForge</PageTitle>
 
 <div class="workspace">
-    <Viewport Baseplate="Baseplate.Default" />
-    <div class="hud">
-        <strong>BrickForge</strong>
-        <span>Right-drag: orbit · Middle-drag: pan · Wheel: zoom</span>
+    <aside class="panel">
+        <h1>BrickForge</h1>
+
+        @foreach (var group in PartCatalog.All.GroupBy(p => p.Kind))
+        {
+            <h2>@(group.Key)s</h2>
+            <div class="part-grid">
+                @foreach (var part in group)
+                {
+                    <button class="part @(part == _part ? "selected" : null)" @onclick="() => _part = part">
+                        @part.Width×@part.Depth
+                    </button>
+                }
+            </div>
+        }
+
+        <h2>Color</h2>
+        <div class="swatches">
+            @foreach (var color in Palette.All)
+            {
+                <button class="swatch @(color == _color ? "selected" : null) @(color.IsTransparent ? "trans" : null)"
+                        style="--swatch: @color.Hex" title="@color.Name" @onclick="() => _color = color"></button>
+            }
+        </div>
+
+        <p class="stats">@_build.Parts.Count parts</p>
+    </aside>
+
+    <div class="stage">
+        <Viewport Build="_build" Part="_part" Color="_color" BuildChanged="StateHasChanged" />
+        <div class="hud">
+            Click: place · Right-click / Del: remove · Right-drag: orbit · Middle-drag: pan · Wheel: zoom
+        </div>
     </div>
 </div>
+
+@code {
+    private readonly Build _build = new(Baseplate.Default);
+    private PartType _part = PartCatalog.Get("brick-2x4");
+    private BrickColor _color = Palette.All[0];
+}

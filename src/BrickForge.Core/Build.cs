@@ -1,0 +1,94 @@
+namespace BrickForge.Core;
+
+/// <summary>A grid cell: x and z in studs from the baseplate's corner, y in plates above its surface.</summary>
+public readonly record struct GridPos(int X, int Y, int Z);
+
+/// <summary>A part in the build. <see cref="Position"/> is its minimum corner after rotation.</summary>
+public sealed record PlacedPart(int Id, PartType Part, GridPos Position, Rotation Rotation, int ColorId)
+{
+    public IEnumerable<GridPos> Cells() => Build.CellsOf(Part, Position, Rotation);
+}
+
+public enum PlacementError { None, OutOfBounds, Overlaps, NotConnected }
+
+public readonly record struct PlaceResult(PlacedPart? Part, PlacementError Error)
+{
+    public bool Success => Error == PlacementError.None;
+}
+
+/// <summary>
+/// The build model and its placement rules: parts stay on the baseplate, never overlap,
+/// and each new part must join at least one stud — onto a part below, or into the underside of one above.
+/// </summary>
+public sealed class Build(Baseplate baseplate)
+{
+    private readonly Dictionary<int, PlacedPart> _parts = new();
+    private readonly Dictionary<GridPos, PlacedPart> _occupied = new();
+    private int _nextId = 1;
+
+    public Baseplate Baseplate { get; } = baseplate;
+
+    public IReadOnlyCollection<PlacedPart> Parts => _parts.Values;
+
+    public PlacedPart? PartAt(GridPos cell) => _occupied.GetValueOrDefault(cell);
+
+    public PlacementError Check(PartType part, GridPos position, Rotation rotation)
+    {
+        var (sizeX, sizeZ) = part.Footprint(rotation);
+        if (position.X < 0 || position.Z < 0 || position.Y < 0 ||
+            position.X + sizeX > Baseplate.WidthStuds || position.Z + sizeZ > Baseplate.DepthStuds)
+            return PlacementError.OutOfBounds;
+
+        if (CellsOf(part, position, rotation).Any(_occupied.ContainsKey))
+            return PlacementError.Overlaps;
+
+        return IsConnected(part, position, sizeX, sizeZ) ? PlacementError.None : PlacementError.NotConnected;
+    }
+
+    public PlaceResult TryPlace(PartType part, GridPos position, Rotation rotation, int colorId)
+    {
+        var error = Check(part, position, rotation);
+        if (error != PlacementError.None) return new PlaceResult(null, error);
+
+        var placed = new PlacedPart(_nextId++, part, position, rotation, colorId);
+        _parts.Add(placed.Id, placed);
+        foreach (var cell in placed.Cells()) _occupied.Add(cell, placed);
+        return new PlaceResult(placed, PlacementError.None);
+    }
+
+    /// <summary>Removes a part. Parts that were only held by it are left in place.</summary>
+    public bool Remove(int partId)
+    {
+        if (!_parts.Remove(partId, out var placed)) return false;
+        foreach (var cell in placed.Cells()) _occupied.Remove(cell);
+        return true;
+    }
+
+    private bool IsConnected(PartType part, GridPos position, int sizeX, int sizeZ)
+    {
+        if (position.Y == 0) return true; // baseplate studs
+
+        var below = position.Y - 1;
+        var above = position.Y + part.HeightPlates;
+        for (var x = position.X; x < position.X + sizeX; x++)
+        for (var z = position.Z; z < position.Z + sizeZ; z++)
+        {
+            // The cell directly below is necessarily the top layer of whatever occupies it.
+            if (_occupied.TryGetValue(new GridPos(x, below, z), out var under) && under.Part.HasStuds)
+                return true;
+            // Every part has anti-studs underneath; ours needs studs to push into them.
+            if (part.HasStuds && _occupied.ContainsKey(new GridPos(x, above, z)))
+                return true;
+        }
+        return false;
+    }
+
+    internal static IEnumerable<GridPos> CellsOf(PartType part, GridPos position, Rotation rotation)
+    {
+        var (sizeX, sizeZ) = part.Footprint(rotation);
+        for (var x = 0; x < sizeX; x++)
+        for (var y = 0; y < part.HeightPlates; y++)
+        for (var z = 0; z < sizeZ; z++)
+            yield return new GridPos(position.X + x, position.Y + y, position.Z + z);
+    }
+}

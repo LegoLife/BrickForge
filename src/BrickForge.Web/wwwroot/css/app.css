@@ -101,9 +101,94 @@ html, body {
     height: 100%;
 }
 
+
 .workspace {
-    position: relative;
+    display: flex;
     height: 100%;
+}
+
+.panel {
+    flex: 0 0 232px;
+    overflow-y: auto;
+    padding: 14px;
+    background: #151a24;
+    border-right: 1px solid #2a3142;
+    font-size: 13px;
+}
+
+    .panel h1 {
+        margin: 0 0 8px;
+        font-size: 18px;
+    }
+
+    .panel h2 {
+        margin: 16px 0 6px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        opacity: 0.6;
+    }
+
+.part-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+}
+
+.part {
+    padding: 5px 0;
+    border: 1px solid #2a3142;
+    border-radius: 4px;
+    background: #1d2330;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+    .part:hover {
+        border-color: #4a5570;
+    }
+
+    .part.selected {
+        border-color: #5b9cff;
+        background: #23324d;
+    }
+
+.swatches {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 5px;
+}
+
+.swatch {
+    aspect-ratio: 1;
+    border: 2px solid transparent;
+    border-radius: 4px;
+    background: var(--swatch);
+    cursor: pointer;
+}
+
+    .swatch.trans {
+        background: linear-gradient(135deg, var(--swatch) 55%, rgba(255, 255, 255, 0.25) 55%);
+        opacity: 0.8;
+    }
+
+    .swatch.selected {
+        border-color: #fff;
+        box-shadow: 0 0 0 1px #151a24 inset;
+    }
+
+.stats {
+    margin-top: 16px;
+    opacity: 0.6;
+}
+
+.stage {
+    position: relative;
+    flex: 1;
+    min-width: 0;
 }
 
 .viewport {
@@ -121,16 +206,15 @@ html, body {
     position: absolute;
     top: 12px;
     left: 12px;
-    display: flex;
-    gap: 12px;
-    align-items: baseline;
     padding: 6px 12px;
     border-radius: 6px;
     background: rgba(15, 18, 26, 0.7);
-    font-size: 13px;
+    font-size: 12px;
+    opacity: 0.85;
     pointer-events: none;
 }
 
-    .hud span {
-        opacity: 0.7;
-    }
+h1:focus {
+    outline: none;
+}
+
