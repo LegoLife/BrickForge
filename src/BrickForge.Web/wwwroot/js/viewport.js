@@ -19,13 +19,17 @@ import { mergeGeometries } from '../lib/three/addons/utils/BufferGeometryUtils.j
  * @property {number} partInset       gap trimmed from each side of a part
  * @property {PartDef[]} parts
  * @property {ColorDef[]} colors
- * @typedef {{ invokeMethodAsync(name: string, ...args: any[]): Promise<any> }} DotNetRef
+ * @typedef {{ invokeMethodAsync(name: string, ...args: any[]): Promise<any>, invokeMethod(name: string, ...args: any[]): any }} DotNetRef
  * @typedef {{ x: number, y: number, z: number }} Cell
  */
 
 const CLICK_TOLERANCE_PX = 5;
 const VALID_COLOR = 0x4ade80;
 const INVALID_COLOR = 0xef4444;
+/** Alignment guides sit this far inside the ghost's footprint, so they run through parts below, not the gaps between them. */
+const GUIDE_INSET = 0.025;
+/** Lifts the footprint outline off the baseplate surface so it doesn't flicker against it. */
+const GUIDE_LIFT = 0.01;
 
 /**
  * @param {HTMLElement} host
@@ -170,6 +174,34 @@ export function createViewport(host, o, dotnet) {
             if (child instanceof THREE.Mesh) child.material = valid ? ghostMaterial(child.userData.colorId) : ghostInvalid;
         }
         ghostLine.color.setHex(valid ? VALID_COLOR : INVALID_COLOR);
+        guideMaterial.color.setHex(valid ? VALID_COLOR : INVALID_COLOR);
+    }
+
+    // Alignment guides: while the ghost is off the ground, lines drop from its bottom corners to the
+    // baseplate and its footprint is outlined there. Depth-tested, so parts in the way hide them.
+    const guideMaterial = new THREE.LineBasicMaterial({ color: VALID_COLOR, transparent: true, opacity: 0.55 });
+    const guidePositions = new THREE.Float32BufferAttribute(new Float32Array(16 * 3), 3); // 4 drops + 4 edges
+    const guides = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', guidePositions), guideMaterial);
+    guides.visible = false;
+    scene.add(guides);
+
+    function updateGuides() {
+        guides.visible = ghost.visible && !!tool && !!candidate && candidate.y > 0;
+        if (!guides.visible || !tool || !candidate) return;
+        const [sx, , sz] = tool.ghostSize;
+        const x0 = candidate.x - W / 2 + GUIDE_INSET, x1 = candidate.x + sx - W / 2 - GUIDE_INSET;
+        const z0 = candidate.z - D / 2 + GUIDE_INSET, z1 = candidate.z + sz - D / 2 - GUIDE_INSET;
+        const bottom = candidate.y * PH;
+        const corners = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+        corners.forEach(([x, z], i) => {
+            const [nx, nz] = corners[(i + 1) % 4];
+            guidePositions.setXYZ(i * 4, x, bottom, z);          // drop line
+            guidePositions.setXYZ(i * 4 + 1, x, GUIDE_LIFT, z);
+            guidePositions.setXYZ(i * 4 + 2, x, GUIDE_LIFT, z);  // footprint edge
+            guidePositions.setXYZ(i * 4 + 3, nx, GUIDE_LIFT, nz);
+        });
+        guidePositions.needsUpdate = true;
+        guides.geometry.computeBoundingSphere();
     }
 
     // Selected parts get a translucent blue shell.
@@ -234,14 +266,14 @@ export function createViewport(host, o, dotnet) {
         hoveredPartId = hit?.partId ?? null;
         updateHighlight();
 
-        const size = tool?.mode === 'build' ? tool.ghostSize : null;
         const aimingAtPart = hoveredPartId !== null && (modifiers.alt || modifiers.shift);
-        const next = hit && size && !aimingAtPart && !boxSelect ? candidateFor(hit, size) : null;
+        const next = hit && tool?.mode === 'build' && !aimingAtPart && !boxSelect ? aim(hit) : null;
         if (!next) {
             // Checked before the same-cell test: refreshHover() resets candidate to null, so a
             // mode switch would otherwise look like "no change" and leave the ghost showing.
             candidate = null;
             ghost.visible = false;
+            guides.visible = false;
             return;
         }
         if (sameCell(next, candidate)) return;
@@ -249,6 +281,7 @@ export function createViewport(host, o, dotnet) {
         candidate = next;
         ghost.position.set(candidate.x - W / 2, candidate.y * PH, candidate.z - D / 2);
         ghost.visible = true;
+        updateGuides();
 
         const seq = ++hoverSeq;
         const cell = candidate;
@@ -274,44 +307,18 @@ export function createViewport(host, o, dotnet) {
     }
 
     /**
-     * Where the ghost would go, as its minimum corner, given what the cursor is over.
-     * @param {Hit} hit @param {[number, number, number]} size the ghost's [x, y (plates), z] extent
-     * @returns {Cell}
+     * Where the ghost would go, as its minimum corner, for what the cursor is over. C# decides (see
+     * Aiming.cs); the call is synchronous, which Blazor WebAssembly allows, so the ghost never lags.
+     * @param {Hit} hit @returns {Cell | null}
      */
-    function candidateFor(hit, size) {
-        const [sx, sy, sz] = size;
+    function aim(hit) {
         const p = hit.point;
-        let cx = Math.floor(p.x + W / 2), cz = Math.floor(p.z + D / 2), y = 0;
-
-        const target = hit.partId !== null ? parts.record(hit.partId) : null;
-        if (target) {
-            const eps = 1e-3;
-            const bottom = target.y * PH, top = (target.y + target.h) * PH;
-            if (p.y >= top - eps) {
-                y = target.y + target.h;                 // on top (body or studs)
-            } else if (p.y <= bottom + eps) {
-                y = target.y - sy;                        // underneath
-            } else {
-                // Side face: step out of the target through the nearest side, same base level.
-                y = target.y;
-                const gx = p.x + W / 2, gz = p.z + D / 2;
-                const sides = [
-                    [gx - target.x, -1, 0],
-                    [target.x + target.sx - gx, 1, 0],
-                    [gz - target.z, 0, -1],
-                    [target.z + target.sz - gz, 0, 1],
-                ].sort((a, b) => a[0] - b[0]);
-                const [, dx, dz] = sides[0];
-                cx = clamp(Math.floor(gx), target.x, target.x + target.sx - 1) + dx;
-                cz = clamp(Math.floor(gz), target.z, target.z + target.sz - 1) + dz;
-            }
+        try {
+            return dotnet.invokeMethod('Aim', p.x + W / 2, p.y / PH, p.z + D / 2, hit.partId);
+        } catch (err) {
+            console.error('[BrickForge] Aim failed', err);
+            return null;
         }
-
-        return {
-            x: clamp(cx - Math.floor((sx - 1) / 2), 0, W - sx),
-            y,
-            z: clamp(cz - Math.floor((sz - 1) / 2), 0, D - sz),
-        };
     }
 
     // ---- input ---------------------------------------------------------------------------
@@ -648,6 +655,7 @@ export function createViewport(host, o, dotnet) {
             materials.dispose();
             baseplate.material.dispose();
             ghostLine.dispose();
+            guideMaterial.dispose();
             ghostInvalid.dispose();
             ghostMaterials.forEach(m => m.dispose());
             selectionBatch?.dispose();
@@ -1019,9 +1027,6 @@ function placeObject(obj, cell, sx, sz, rotation, o) {
 function sameCell(a, b) {
     return a === b || (!!a && !!b && a.x === b.x && a.y === b.y && a.z === b.z);
 }
-
-/** @param {number} v @param {number} lo @param {number} hi */
-function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
 
 /** @param {number[]} a @param {number[]} b */
 function sameNumbers(a, b) {

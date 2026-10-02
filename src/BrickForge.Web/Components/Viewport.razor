@@ -91,6 +91,12 @@
 
     public sealed record CellDto(int X, int Y, int Z);
 
+    /// <summary>Where the ghost goes for the point under the cursor. Called synchronously on every pointer move.</summary>
+    /// <param name="y">In plates; x and z in studs from the baseplate's corner.</param>
+    [JSInvokable]
+    public CellDto? Aim(double x, double y, double z, int? partId) =>
+        Editor.Aim(new PointerHit(x, y, z, partId)) is { } cell ? new CellDto(cell.X, cell.Y, cell.Z) : null;
+
     [JSInvokable]
     public bool CanPlace(int x, int y, int z) => Editor.CanPlaceAt(new GridPos(x, y, z));
 
