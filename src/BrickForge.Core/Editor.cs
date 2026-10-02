@@ -130,6 +130,13 @@ public sealed class Editor(Build build)
 
     // ---- editing ------------------------------------------------------------------------------
 
+    /// <summary>Where the ghost would go for what the cursor is over, or null for nowhere. See <see cref="Aiming"/>.</summary>
+    public GridPos? Aim(PointerHit hit)
+    {
+        var ghost = Ghost;
+        return Aiming.Anchor(Build, hit, ghost.SizeX, ghost.SizeY, ghost.SizeZ);
+    }
+
     public bool CanPlaceAt(GridPos position) =>
         Mode == EditorMode.Build && Build.CheckGroup([.. Ghost.At(position)], MovingIds()) == PlacementError.None;
 
