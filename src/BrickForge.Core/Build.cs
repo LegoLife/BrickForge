@@ -9,7 +9,7 @@ public sealed record PlacedPart(int Id, PartType Part, GridPos Position, Rotatio
     public IEnumerable<GridPos> Cells() => Build.CellsOf(Part, Position, Rotation);
 }
 
-public enum PlacementError { None, OutOfBounds, Overlaps, NotConnected }
+public enum PlacementError { None, OutOfBounds, Overlaps }
 
 public readonly record struct PlaceResult(PlacedPart? Part, PlacementError Error)
 {
@@ -17,8 +17,8 @@ public readonly record struct PlaceResult(PlacedPart? Part, PlacementError Error
 }
 
 /// <summary>
-/// The build model and its placement rules: parts stay on the baseplate, never overlap,
-/// and each new part must join at least one stud — onto a part below, or into the underside of one above.
+/// The build model and its placement rules: parts stay on the baseplate and never overlap.
+/// Nothing has to hold a part up — parts may float.
 /// </summary>
 public sealed class Build(Baseplate baseplate)
 {
@@ -42,18 +42,14 @@ public sealed class Build(Baseplate baseplate)
 
     public PlacedPart? Find(int partId) => _parts.GetValueOrDefault(partId);
 
-    /// <param name="ignorePartId">A part being moved: its own cells neither block nor support the check.</param>
+    /// <param name="ignorePartId">A part being moved: its own cells don't block the check.</param>
     public PlacementError Check(PartType part, GridPos position, Rotation rotation, int? ignorePartId = null) =>
         CheckGroup(
             [new PartPlacement(part, position, rotation, 0)],
             ignorePartId is { } id ? new HashSet<int> { id } : null);
 
-    /// <summary>
-    /// Checks placing several parts together: each must be on the baseplate and overlap nothing
-    /// (nor each other), and at least one must join the existing build or the baseplate. Parts in
-    /// the group need not join the build individually — they hold on to each other.
-    /// </summary>
-    /// <param name="ignore">Parts being moved: their own cells neither block nor support the check.</param>
+    /// <summary>Checks placing several parts together: each must be on the baseplate and overlap nothing, nor each other.</summary>
+    /// <param name="ignore">Parts being moved: their own cells don't block the check.</param>
     public PlacementError CheckGroup(IReadOnlyList<PartPlacement> placements, IReadOnlySet<int>? ignore = null)
     {
         foreach (var p in placements)
@@ -72,9 +68,7 @@ public sealed class Build(Baseplate baseplate)
                 return PlacementError.Overlaps;
         }
 
-        return placements.Any(p => IsConnected(p.Part, p.Position, p.Rotation, ignore))
-            ? PlacementError.None
-            : PlacementError.NotConnected;
+        return PlacementError.None;
     }
 
     /// <summary>Adds parts already validated with <see cref="CheckGroup"/>, giving each a new id.</summary>
@@ -123,8 +117,7 @@ public sealed class Build(Baseplate baseplate)
     }
 
     /// <summary>
-    /// Puts a part in exactly as given, keeping its id and skipping the connection rule: for undo/redo
-    /// and loading saved builds, where parts may legitimately float.
+    /// Puts a part in exactly as given, keeping its id: for undo/redo and loading saved builds.
     /// </summary>
     /// <exception cref="InvalidOperationException">The part is off the baseplate or overlaps another.</exception>
     internal void Restore(PlacedPart part)
@@ -149,26 +142,6 @@ public sealed class Build(Baseplate baseplate)
 
     private PlacedPart? OccupantOf(GridPos cell, IReadOnlySet<int>? ignore) =>
         _occupied.TryGetValue(cell, out var p) && ignore?.Contains(p.Id) != true ? p : null;
-
-    private bool IsConnected(PartType part, GridPos position, Rotation rotation, IReadOnlySet<int>? ignore)
-    {
-        var (sizeX, sizeZ) = part.Footprint(rotation);
-        if (position.Y == 0) return true; // baseplate studs
-
-        var below = position.Y - 1;
-        var above = position.Y + part.HeightPlates;
-        for (var x = position.X; x < position.X + sizeX; x++)
-        for (var z = position.Z; z < position.Z + sizeZ; z++)
-        {
-            // The cell directly below is necessarily the top layer of whatever occupies it.
-            if (OccupantOf(new GridPos(x, below, z), ignore) is { Part.HasStuds: true })
-                return true;
-            // Every part has anti-studs underneath; ours needs studs to push into them.
-            if (part.HasStuds && OccupantOf(new GridPos(x, above, z), ignore) is not null)
-                return true;
-        }
-        return false;
-    }
 
     internal static IEnumerable<GridPos> CellsOf(PartType part, GridPos position, Rotation rotation)
     {

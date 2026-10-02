@@ -63,7 +63,7 @@ public class BuildFileTests
     }
 
     [Fact]
-    public void Floating_parts_are_allowed_because_removal_can_leave_them()
+    public void Floating_parts_are_allowed()
     {
         var loaded = BuildFile.Read(Json("""["brick-1x1",0,9,0,0,0]""")).Parts;
 

@@ -25,7 +25,7 @@ public sealed record HeldGroup(PartGroup Group, IReadOnlyList<PlacedPart> Moving
 }
 
 /// <summary>
-/// Everything the user can do to a build: the current tool (part, colour, rotation, mode), placing,
+/// Everything the user can do to a build: the current tool (part, colour, rotation, height, mode), placing,
 /// removing, painting, the eyedropper, selecting, the clipboard, moving parts, and undo/redo.
 /// Every call raises <see cref="Changed"/> — with an empty change when only tool or selection state moved.
 /// </summary>
@@ -53,6 +53,14 @@ public sealed class Editor(Build build)
 
     public EditorMode Mode { get; private set; } = EditorMode.Build;
 
+    /// <summary>
+    /// Plates the ghost is lifted above (or, negative, lowered below) wherever the cursor aims it, to place
+    /// parts in open air. Resets whenever the ghost changes to a different part or group.
+    /// </summary>
+    public int HeightOffset { get; private set; }
+
+    public const int MaxHeightOffset = 96;
+
     public IReadOnlySet<int> Selection => _selection;
     public bool HasClipboard => _clipboard is not null;
 
@@ -70,6 +78,7 @@ public sealed class Editor(Build build)
     {
         var change = EndHold();
         Part = part;
+        HeightOffset = 0;
         Mode = EditorMode.Build;
         Raise(change);
     }
@@ -85,6 +94,13 @@ public sealed class Editor(Build build)
     public void Rotate(int quarterTurns)
     {
         Rotation = (Rotation)((((int)Rotation + quarterTurns) % 4 + 4) % 4);
+        Raise(BuildChange.None);
+    }
+
+    /// <param name="plates">Positive lifts the ghost, negative lowers it; 3 plates is one brick.</param>
+    public void AdjustHeight(int plates)
+    {
+        HeightOffset = Math.Clamp(HeightOffset + plates, -MaxHeightOffset, MaxHeightOffset);
         Raise(BuildChange.None);
     }
 
@@ -130,11 +146,16 @@ public sealed class Editor(Build build)
 
     // ---- editing ------------------------------------------------------------------------------
 
-    /// <summary>Where the ghost would go for what the cursor is over, or null for nowhere. See <see cref="Aiming"/>.</summary>
+    /// <summary>
+    /// Where the ghost would go for what the cursor is over (see <see cref="Aiming"/>), shifted by
+    /// <see cref="HeightOffset"/> but never below the baseplate; null for nowhere.
+    /// </summary>
     public GridPos? Aim(PointerHit hit)
     {
         var ghost = Ghost;
-        return Aiming.Anchor(Build, hit, ghost.SizeX, ghost.SizeY, ghost.SizeZ);
+        return Aiming.Anchor(Build, hit, ghost.SizeX, ghost.SizeY, ghost.SizeZ) is { } anchor
+            ? anchor with { Y = Math.Max(0, anchor.Y + HeightOffset) }
+            : null;
     }
 
     public bool CanPlaceAt(GridPos position) =>
@@ -367,6 +388,7 @@ public sealed class Editor(Build build)
     {
         _heldLabel = label;
         _toolRotation = Rotation;
+        HeightOffset = 0;
         Rotation = Rotation.R0;
         _heldBase = group;
         _moving = moving;
@@ -383,6 +405,7 @@ public sealed class Editor(Build build)
         _moving = [];
         _heldLabel = null;
         Rotation = _toolRotation;
+        HeightOffset = 0;
         return reshow;
     }
 

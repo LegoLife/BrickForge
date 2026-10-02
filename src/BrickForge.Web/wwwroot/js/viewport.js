@@ -324,7 +324,7 @@ export function createViewport(host, o, dotnet) {
     // ---- input ---------------------------------------------------------------------------
     // C# decides what a click or key means (place, paint, eyedrop, pick up, undo...);
     // this side only reports where the pointer is and which modifiers are held.
-    const PLAIN_KEYS = new Set(['r', 'b', 'p', 's', 'e', 'escape', 'delete', 'backspace']);
+    const PLAIN_KEYS = new Set(['r', 'b', 'p', 's', 'e', '[', ']', 'escape', 'delete', 'backspace']);
     const CTRL_KEYS = new Set(['z', 'y', 'c', 'x', 'v', 'a']);
 
     /** @type {{ x: number, y: number, button: number } | null} */
@@ -416,7 +416,8 @@ export function createViewport(host, o, dotnet) {
     async function onKeyDown(e) {
         if (isTyping(e)) return;
         setModifiers(e);
-        const key = e.key.toLowerCase();
+        // Bracket keys by position: with Shift held, e.key turns into { and } (on US layouts).
+        const key = e.code === 'BracketLeft' ? '[' : e.code === 'BracketRight' ? ']' : e.key.toLowerCase();
         const ctrl = e.ctrlKey || e.metaKey;
         if (key === 'f' && !ctrl) {
             resetView(); // camera only, so C# needn't know

@@ -171,7 +171,7 @@ public class SelectionTests
         _editor.Copy();
         _editor.Paste();
 
-        _editor.PlaceAt(new GridPos(20, 9, 0)); // floating
+        _editor.PlaceAt(bottom.Position); // right where the original is
 
         Assert.Equal(3, _editor.Build.Parts.Count);
     }

@@ -167,6 +167,65 @@ public class AimingTests
     }
 
     [Fact]
+    public void The_height_offset_lifts_the_ghost_off_whatever_it_aims_at()
+    {
+        var target = Target();
+        var editor = new Editor(_build);
+        editor.SelectPart(Brick2x2);
+
+        editor.AdjustHeight(3);
+        editor.AdjustHeight(1);
+
+        Assert.Equal(new GridPos(10, 4, 10), editor.Aim(new PointerHit(10.5, 0, 10.5, null)));
+        Assert.Equal(new GridPos(5, 7, 5), editor.Aim(new PointerHit(5.5, 3, 6.2, target.Id))); // on top
+        Assert.Equal(new GridPos(6, 4, 5), editor.Aim(new PointerHit(6 - Inset, 1.5, 6.2, target.Id))); // beside
+    }
+
+    [Fact]
+    public void Lowering_the_ghost_stops_at_the_baseplate()
+    {
+        var target = Target(y: 6);
+        var editor = new Editor(_build);
+        editor.SelectPart(Brick2x2);
+
+        editor.AdjustHeight(-4);
+
+        Assert.Equal(2, editor.Aim(new PointerHit(6 - Inset, 7.5, 6.2, target.Id))?.Y); // beside, 4 plates lower
+        Assert.Equal(0, editor.Aim(new PointerHit(10.5, 0, 10.5, null))?.Y);
+    }
+
+    [Fact]
+    public void The_height_offset_is_limited()
+    {
+        var editor = new Editor(_build);
+
+        editor.AdjustHeight(Editor.MaxHeightOffset + 50);
+        Assert.Equal(Editor.MaxHeightOffset, editor.HeightOffset);
+
+        editor.AdjustHeight(-3 * Editor.MaxHeightOffset);
+        Assert.Equal(-Editor.MaxHeightOffset, editor.HeightOffset);
+    }
+
+    [Fact]
+    public void The_height_offset_resets_when_the_ghost_changes()
+    {
+        var editor = new Editor(_build);
+        var group = PartGroup.Single(Brick2x2, Rotation.R0, 0);
+
+        editor.AdjustHeight(3);
+        editor.SelectPart(Brick2x2);
+        Assert.Equal(0, editor.HeightOffset);
+
+        editor.AdjustHeight(3);
+        editor.Hold(group);
+        Assert.Equal(0, editor.HeightOffset);
+
+        editor.AdjustHeight(3);
+        editor.Cancel();
+        Assert.Equal(0, editor.HeightOffset);
+    }
+
+    [Fact]
     public void The_editor_aims_a_held_group_by_its_bounding_box()
     {
         var target = Target(); // x 4..6

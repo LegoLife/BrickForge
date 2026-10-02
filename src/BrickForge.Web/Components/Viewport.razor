@@ -143,7 +143,7 @@
     [JSInvokable]
     public void Remove(int partId) => Editor.Remove(partId);
 
-    /// <param name="key">Lower-cased <c>KeyboardEvent.key</c>.</param>
+    /// <param name="key">Lower-cased <c>KeyboardEvent.key</c>, except the bracket keys, always "[" and "]".</param>
     [JSInvokable]
     public void Key(string key, bool ctrl, bool shift, int? hoveredPartId)
     {
@@ -153,6 +153,8 @@
             case ("z", true): Editor.Undo(); break;
             case ("y", true): Editor.Redo(); break;
             case ("r", false): Editor.Rotate(shift ? -1 : 1); break;
+            case ("[", false): Editor.AdjustHeight(shift ? -LegoUnits.PlatesPerBrick : -1); break;
+            case ("]", false): Editor.AdjustHeight(shift ? LegoUnits.PlatesPerBrick : 1); break;
             case ("c", true): Editor.Copy(); break;
             case ("x", true): Editor.Cut(); break;
             case ("v", true): Editor.Paste(); break;

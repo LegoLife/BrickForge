@@ -5,9 +5,7 @@ public class BuildTests
     private static readonly PartType Brick1x1 = PartCatalog.Get("brick-1x1");
     private static readonly PartType Brick2x2 = PartCatalog.Get("brick-2x2");
     private static readonly PartType Brick2x4 = PartCatalog.Get("brick-2x4");
-    private static readonly PartType Plate1x1 = PartCatalog.Get("plate-1x1");
     private static readonly PartType Tile2x2 = PartCatalog.Get("tile-2x2");
-    private static readonly PartType Tile1x1 = PartCatalog.Get("tile-1x1");
 
     private static Build NewBuild() => new(new Baseplate(16, 16));
 
@@ -75,11 +73,12 @@ public class BuildTests
     }
 
     [Fact]
-    public void Floating_part_is_rejected()
+    public void Part_can_float_with_nothing_holding_it_up()
     {
-        var result = NewBuild().TryPlace(Brick2x2, new GridPos(4, 3, 4), Rotation.R0, 0);
+        var build = NewBuild();
 
-        Assert.Equal(PlacementError.NotConnected, result.Error);
+        Place(build, Brick2x2, 4, 6, 4);
+        Place(build, Brick1x1, 9, 1, 9); // under nothing, over nothing
     }
 
     [Fact]
@@ -92,50 +91,12 @@ public class BuildTests
     }
 
     [Fact]
-    public void Single_stud_overlap_is_enough_to_connect()
-    {
-        var build = NewBuild();
-        Place(build, Brick2x2, 4, 0, 4);
-
-        Place(build, Brick2x4, 5, 3, 5); // only cell (5,5) sits over the lower brick
-    }
-
-    [Fact]
-    public void Part_beside_but_not_on_a_brick_is_not_connected()
-    {
-        var build = NewBuild();
-        Place(build, Brick2x2, 4, 0, 4);
-
-        Assert.Equal(PlacementError.NotConnected, build.Check(Brick2x2, new GridPos(6, 3, 4), Rotation.R0));
-    }
-
-    [Fact]
-    public void Part_can_hang_below_an_overhang()
-    {
-        var build = NewBuild();
-        Place(build, Brick2x2, 0, 0, 0);
-        Place(build, Brick2x4, 0, 3, 0); // overhangs z = 2..3 with empty space beneath
-
-        Place(build, Plate1x1, 0, 2, 3); // its studs push into the overhang's underside
-    }
-
-    [Fact]
-    public void Nothing_connects_on_top_of_a_tile()
+    public void Parts_can_go_on_top_of_a_tile()
     {
         var build = NewBuild();
         Place(build, Tile2x2, 4, 0, 4);
 
-        Assert.Equal(PlacementError.NotConnected, build.Check(Brick1x1, new GridPos(4, 1, 4), Rotation.R0));
-    }
-
-    [Fact]
-    public void Tile_cannot_hang_below_a_part()
-    {
-        var build = NewBuild();
-        Place(build, Brick2x2, 0, 0, 0);
-        Place(build, Brick2x4, 0, 3, 0);
-
-        Assert.Equal(PlacementError.NotConnected, build.Check(Tile1x1, new GridPos(0, 2, 3), Rotation.R0));
+        Place(build, Brick1x1, 4, 1, 4);
     }
 
     [Fact]
@@ -176,9 +137,11 @@ public class BuildTests
         var build = NewBuild();
         var part = Place(build, Brick2x4, 0, 0, 0);
 
-        var result = build.Modify(part.Id, new GridPos(0, 9, 0), Rotation.R0, part.ColorId);
+        Place(build, Brick2x4, 4, 0, 0);
 
-        Assert.Equal(PlacementError.NotConnected, result.Error);
+        var result = build.Modify(part.Id, new GridPos(3, 0, 0), Rotation.R0, part.ColorId);
+
+        Assert.Equal(PlacementError.Overlaps, result.Error);
         Assert.Same(part, build.PartAt(new GridPos(0, 0, 0)));
     }
 
@@ -195,36 +158,12 @@ public class BuildTests
     }
 
     [Fact]
-    public void Part_cannot_connect_through_the_part_being_moved()
-    {
-        var build = NewBuild();
-        var part = Place(build, Brick2x2, 0, 0, 0);
-
-        Assert.Equal(PlacementError.NotConnected,
-            build.Check(Brick2x2, new GridPos(0, 3, 0), Rotation.R0, ignorePartId: part.Id));
-    }
-
-    [Fact]
-    public void Group_needs_only_one_part_connected()
-    {
-        var build = NewBuild();
-        Place(build, Brick2x2, 0, 0, 0);
-        // A tower whose bottom brick sits on the existing one; the upper brick only touches the group.
-        var group = PartGroup.From([
-            new PlacedPart(1, Brick2x2, new GridPos(0, 0, 0), Rotation.R0, 0),
-            new PlacedPart(2, Brick2x2, new GridPos(0, 3, 0), Rotation.R0, 0),
-        ]);
-
-        Assert.Equal(PlacementError.None, build.CheckGroup(group.At(new GridPos(0, 3, 0)).ToList()));
-    }
-
-    [Fact]
-    public void Floating_group_is_rejected()
+    public void Group_can_float()
     {
         var build = NewBuild();
         var group = PartGroup.From([new PlacedPart(1, Brick2x2, new GridPos(0, 0, 0), Rotation.R0, 0)]);
 
-        Assert.Equal(PlacementError.NotConnected, build.CheckGroup(group.At(new GridPos(4, 6, 4)).ToList()));
+        Assert.Equal(PlacementError.None, build.CheckGroup(group.At(new GridPos(4, 6, 4)).ToList()));
     }
 
     [Fact]

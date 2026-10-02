@@ -52,15 +52,15 @@
         <p class="status">
             @if (_editor.Held is { IsPaste: true, Label: { } label } placing)
             {
-                <span class="carrying">Placing @label (@Parts(placing.Group.Parts.Count)) — click to stamp, R to rotate, Esc to stop</span>
+                <span class="carrying">Placing @label (@Parts(placing.Group.Parts.Count))@Height — click to stamp, R to rotate, Esc to stop</span>
             }
             else if (_editor.Held is { IsPaste: true } paste)
             {
-                <span class="carrying">Pasting @Parts(paste.Group.Parts.Count) — click to stamp, R to rotate, Esc to stop</span>
+                <span class="carrying">Pasting @Parts(paste.Group.Parts.Count)@Height — click to stamp, R to rotate, Esc to stop</span>
             }
             else if (_editor.Held is { } moving)
             {
-                <span class="carrying">Moving @Parts(moving.Moving.Count) — click to drop, R to rotate, Esc to cancel</span>
+                <span class="carrying">Moving @Parts(moving.Moving.Count)@Height — click to drop, R to rotate, Esc to cancel</span>
             }
             else if (_editor.Mode == EditorMode.Paint)
             {
@@ -72,7 +72,7 @@
             }
             else
             {
-                <span>@_editor.Part.Name · @_editor.Color.Name</span>
+                <span>@_editor.Part.Name · @_editor.Color.Name@Height</span>
             }
         </p>
 
@@ -212,6 +212,7 @@
         ("Shift+click", "move (whole selection if selected)"),
         ("Alt+click · E", "eyedropper"),
         ("R", "rotate"),
+        ("[ · ]", "lower · raise (Shift: a brick)"),
         ("B · P · S", "build · paint · select"),
         ("Drag", "box-select"),
         ("Ctrl+C · X · V", "copy · cut · paste"),
@@ -502,6 +503,13 @@
     private static string? Active(bool active) => active ? "selected" : null;
 
     private static string Parts(int count) => count == 1 ? "1 part" : $"{count} parts";
+
+    /// <summary>The ghost's height offset, e.g. " · raised 4 plates", or nothing at the usual height.</summary>
+    private string Height => _editor.HeightOffset switch
+    {
+        0 => "",
+        var n => $" · {(n > 0 ? "raised" : "lowered")} {Math.Abs(n)} {(Math.Abs(n) == 1 ? "plate" : "plates")}",
+    };
     /// <summary>Top-down icon: the part's outline with a dot per stud (none for tiles).</summary>
     private static RenderFragment Footprint(PartType part) => builder =>
     {

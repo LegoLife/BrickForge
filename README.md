@@ -14,8 +14,11 @@ takes a few seconds while the .NET runtime downloads)
 
 - **Real brick proportions**: bricks, plates and tiles from 1×1 up to 6×8, snapped to a stud grid
   (1 stud = 8 mm, 1 plate = 3.2 mm, 1 brick = 3 plates).
-- **Connection rules**: parts can't overlap, and every part must join at least one stud, either sitting
-  on something or hanging underneath an overhang. The ghost preview turns green or red as you move it.
+- **Free placement**: point at any face of a part and the new one sits flush against it, or on top, or
+  hanging underneath. Parts can float, and [ and ] raise or lower the ghost to place one in open air.
+  Parts can't overlap: the ghost preview turns green or red as you move it.
+- **Alignment guides**: while the ghost is above the baseplate, lines drop from its corners and its
+  footprint is outlined on the baseplate.
 - **23 colours**, including transparent ones, plus an eyedropper and a paint mode.
 - **Select, copy, cut and paste**: click, Ctrl+click or drag a box to select. Pasted groups
   follow the cursor, rotate with R, and stamp copies until you press Esc. Shift+click moves a whole selection.
@@ -66,6 +69,7 @@ Cottage and Car.
 | Shift+click | Pick up a part to move it, or the whole selection if the part is selected |
 | Alt+click · E | Eyedropper |
 | R · Shift+R | Rotate |
+| ] · [ | Raise · lower the ghost one plate (Shift: one brick) |
 | B · P · S | Build · Paint · Select mode |
 | Drag (Select mode) | Box-select |
 | Ctrl+C · Ctrl+X · Ctrl+V | Copy · cut · paste |

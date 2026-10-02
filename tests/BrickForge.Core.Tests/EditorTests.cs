@@ -47,7 +47,7 @@ public class EditorTests
     [Fact]
     public void Invalid_placement_changes_nothing()
     {
-        _editor.PlaceAt(new GridPos(0, 5, 0));
+        _editor.PlaceAt(new GridPos(15, 0, 0)); // a 2x4 hangs off the 16-stud baseplate
 
         Assert.Empty(_editor.Build.Parts);
         Assert.False(_editor.CanUndo);
